@@ -109,9 +109,8 @@
             const timeoutId = setTimeout(() => controller.abort(), 6000);
 
             try {
-                // Step 1: Fast direct native REST API ping
-                const pingUrl = `${cleanUrl}/rest/v1/`;
-                const pingRes = await fetch(pingUrl, {
+                // Directly check public sales_team table using anon public key
+                const tableRes = await fetch(`${cleanUrl}/rest/v1/sales_team?select=id&limit=1`, {
                     method: 'GET',
                     headers: {
                         'apikey': cleanKey,
@@ -122,78 +121,45 @@
 
                 clearTimeout(timeoutId);
 
-                // Handle HTTP response codes
-                if (pingRes.status === 401) {
+                if (tableRes.ok) {
+                    return {
+                        success: true,
+                        mode: 'live',
+                        message: 'Connected to live Supabase! Database tables verified.'
+                    };
+                }
+
+                if (tableRes.status === 401) {
                     let errDetail = 'Invalid Anon Public Key';
                     try {
-                        const json = await pingRes.json();
+                        const json = await tableRes.json();
                         if (json && json.message) errDetail = json.message;
                     } catch (e) {}
                     return {
                         success: false,
                         mode: 'invalid_key',
-                        message: `Authentication Failed (${errDetail}). Please ensure you copied the "anon public" key from Project Settings -> API, not the service role key or user password.`
+                        message: `Authentication Failed (${errDetail}). Please ensure you copied the "anon public" key from Project Settings -> API.`
                     };
                 }
 
-                if (!pingRes.ok && pingRes.status !== 200 && pingRes.status !== 300) {
+                let errBody = '';
+                try {
+                    errBody = await tableRes.text();
+                } catch (e) {}
+
+                if (tableRes.status === 404 || errBody.includes('42P01') || errBody.includes('does not exist') || errBody.includes('PGRST205')) {
                     return {
                         success: false,
-                        mode: 'error',
-                        message: `Supabase server returned HTTP status ${pingRes.status} (${pingRes.statusText || 'Error'}).`
+                        mode: 'missing_tables',
+                        message: 'Connected to Supabase project successfully! However, the "sales_team" table was not found. Please run schema.sql in Supabase SQL Editor.'
                     };
                 }
 
-                // Step 2: Key & Project are verified! Check if sales_team table exists
-                const tableController = new AbortController();
-                const tableTimeout = setTimeout(() => tableController.abort(), 5000);
-
-                try {
-                    const tableRes = await fetch(`${cleanUrl}/rest/v1/sales_team?select=id&limit=1`, {
-                        method: 'GET',
-                        headers: {
-                            'apikey': cleanKey,
-                            'Authorization': `Bearer ${cleanKey}`
-                        },
-                        signal: tableController.signal
-                    });
-
-                    clearTimeout(tableTimeout);
-
-                    if (tableRes.ok) {
-                        return {
-                            success: true,
-                            mode: 'live',
-                            message: 'Connected to live Supabase! Database tables verified.'
-                        };
-                    }
-
-                    let errBody = '';
-                    try {
-                        errBody = await tableRes.text();
-                    } catch (e) {}
-
-                    if (tableRes.status === 404 || errBody.includes('42P01') || errBody.includes('does not exist') || errBody.includes('PGRST205')) {
-                        return {
-                            success: false,
-                            mode: 'missing_tables',
-                            message: 'Connected to Supabase project successfully! However, the "sales_team" table was not found. Please run schema.sql in Supabase SQL Editor.'
-                        };
-                    }
-
-                    return {
-                        success: true,
-                        mode: 'live',
-                        message: 'Connected to Supabase project!'
-                    };
-                } catch (tableErr) {
-                    clearTimeout(tableTimeout);
-                    return {
-                        success: true,
-                        mode: 'live',
-                        message: 'Connected to Supabase project!'
-                    };
-                }
+                return {
+                    success: false,
+                    mode: 'error',
+                    message: `Supabase server returned HTTP status ${tableRes.status} (${tableRes.statusText || 'Error'}).`
+                };
 
             } catch (err) {
                 clearTimeout(timeoutId);
@@ -320,10 +286,21 @@
                     ]);
 
                     if (!error && Array.isArray(data) && data.length > 0) {
+                        // Deduplicate members by name keeping the latest entry
+                        const seen = new Set();
+                        const unique = [];
+                        for (let i = data.length - 1; i >= 0; i--) {
+                            const item = data[i];
+                            const key = (item.name || '').trim().toLowerCase();
+                            if (key && !seen.has(key)) {
+                                seen.add(key);
+                                unique.unshift(item);
+                            }
+                        }
                         try {
-                            localStorage.setItem(TEAM_STORAGE_KEY, JSON.stringify(data));
+                            localStorage.setItem(TEAM_STORAGE_KEY, JSON.stringify(unique));
                         } catch (e) {}
-                        return data;
+                        return unique;
                     }
                 } catch (e) {
                     console.warn('[TeamService] Supabase team fetch note:', e);
