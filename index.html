@@ -5,6 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Warehouse ERP - Dispatch & Carton Tracking System</title>
     
+    <!-- Cache Prevention Headers -->
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    
     <!-- Google Fonts (Inter) -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -390,17 +395,30 @@
             <div class="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-5">
                 <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100">
                     <div>
-                        <h3 class="text-base sm:text-lg font-bold text-slate-900 flex items-center gap-2">
-                            <i data-lucide="users" class="w-5 h-5 text-emerald-600"></i>
-                            Sales & Warehouse Team Directory
-                        </h3>
+                        <div class="flex items-center gap-2">
+                            <h3 class="text-base sm:text-lg font-bold text-slate-900 flex items-center gap-2">
+                                <i data-lucide="users" class="w-5 h-5 text-emerald-600"></i>
+                                Sales & Warehouse Team Directory
+                            </h3>
+                            <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                                v7.0 • Instant Delete
+                            </span>
+                        </div>
                         <p class="text-xs text-slate-500 mt-0.5">
-                            Add or delete team members who upload cartons and authorize dispatches.
+                            Add or delete team members who upload cartons and authorize dispatches. Changes save instantly.
                         </p>
                     </div>
-                    <button type="button" onclick="window.openAddMemberModal()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all cursor-pointer">
-                        <i data-lucide="user-plus" class="w-4 h-4"></i> Add Team Member (Modal)
-                    </button>
+                    <div class="flex items-center gap-2 flex-wrap">
+                        <button type="button" onclick="window.openAddMemberModal()" class="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-xs transition-all cursor-pointer">
+                            <i data-lucide="user-plus" class="w-3.5 h-3.5"></i> Add Member
+                        </button>
+                        <button type="button" onclick="window.resetDefaultTeamMembers()" class="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 active:scale-95 text-slate-700 border border-slate-200 rounded-lg text-xs font-medium flex items-center gap-1 transition-all cursor-pointer" title="Reset back to default 4 members">
+                            <i data-lucide="rotate-ccw" class="w-3.5 h-3.5"></i> Reset Default
+                        </button>
+                        <button type="button" onclick="window.clearAllTeamMembers()" class="px-3 py-1.5 bg-rose-50 hover:bg-rose-100 active:scale-95 text-rose-700 border border-rose-200 rounded-lg text-xs font-medium flex items-center gap-1 transition-all cursor-pointer" title="Remove all members">
+                            <i data-lucide="trash" class="w-3.5 h-3.5"></i> Clear All
+                        </button>
+                    </div>
                 </div>
 
                 <!-- Quick Inline Add Member Bar -->
@@ -663,6 +681,6 @@
     </div>
 
     <!-- Application Core Script (Runs on both local file:// and web/GitHub Pages) -->
-    <script src="js/app.js?v=5"></script>
+    <script src="js/app.js?v=7.0"></script>
 </body>
 </html>
