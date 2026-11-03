@@ -1750,8 +1750,7 @@
         }
     };
 
-    window.handleAddMemberSubmit = async function (e) {
-        if (e && e.preventDefault) e.preventDefault();
+    window.saveNewTeamMember = async function () {
         const nameInput = document.getElementById('newMemberName');
         const roleInput = document.getElementById('newMemberRole');
         const empIdInput = document.getElementById('newMemberEmpId');
@@ -1772,9 +1771,12 @@
 
         try {
             await TeamService.addMember({ name, role, employee_id: empId, phone, email });
-            showToast(`Added ${name} to team!`, 'success');
+            showToast(`Added ${name} to sales team!`, 'success');
             window.closeAddMemberModal();
-            document.getElementById('addMemberForm')?.reset();
+            if (nameInput) nameInput.value = '';
+            if (empIdInput) empIdInput.value = '';
+            if (phoneInput) phoneInput.value = '';
+            if (emailInput) emailInput.value = '';
             window.renderTeamDirectory();
             populateUploaderDropdown();
         } catch (err) {
@@ -1782,13 +1784,15 @@
         }
     };
 
+    window.handleAddMemberSubmit = window.saveNewTeamMember;
+
     window.handleDeleteMember = async function (id) {
+        if (!id) return;
         const member = (state.teamMembers || []).find(m => m.id === id);
-        const name = member ? member.name : 'this member';
-        if (!confirm(`Are you sure you want to remove "${name}" from the sales team?`)) return;
+        const name = member ? member.name : 'Team member';
 
         await TeamService.deleteMember(id);
-        showToast(`Removed ${name}.`, 'success');
+        showToast(`Removed ${name} from sales team.`, 'success');
         window.renderTeamDirectory();
         populateUploaderDropdown();
     };
