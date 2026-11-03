@@ -23,9 +23,24 @@
     const DISPATCH_STORAGE_KEY = 'warehouse_erp_dispatches_cache';
     const CARTON_STORAGE_KEY = 'warehouse_erp_cartons_cache';
 
+    const DEFAULT_SUPABASE_URL = 'https://vdgmbqhjzpxwhndnpocq.supabase.co';
+    const DEFAULT_SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InZkZ21icWhqenB4d2huZG5wb2NxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTM2Mzg5ODAsImV4cCI6MjEwOTIxNDk4MH0.cz3P49D_e4DMpS0JajQpp6Ids1WE8Ka-oLlL5ds29lE';
+
+    function getInitialConfigUrl() {
+        const stored = localStorage.getItem(`${CONFIG_STORAGE_KEY}_url`);
+        if (stored && stored.trim().startsWith('https://')) return stored.trim();
+        return DEFAULT_SUPABASE_URL;
+    }
+
+    function getInitialConfigKey() {
+        const stored = localStorage.getItem(`${CONFIG_STORAGE_KEY}_key`);
+        if (stored && stored.trim().length > 20) return stored.trim();
+        return DEFAULT_SUPABASE_KEY;
+    }
+
     const AppConfig = {
-        supabaseUrl: localStorage.getItem(`${CONFIG_STORAGE_KEY}_url`) || '',
-        supabaseAnonKey: localStorage.getItem(`${CONFIG_STORAGE_KEY}_key`) || '',
+        supabaseUrl: getInitialConfigUrl(),
+        supabaseAnonKey: getInitialConfigKey(),
         storageBucketName: 'warehouse-photos',
 
         isConfigured() {
@@ -38,8 +53,8 @@
         },
 
         saveConfig(url, key) {
-            this.supabaseUrl = (url || '').trim().replace(/\/+$/, '');
-            this.supabaseAnonKey = (key || '').trim().replace(/^["']|["']$/g, '');
+            this.supabaseUrl = (url || DEFAULT_SUPABASE_URL).trim().replace(/\/+$/, '');
+            this.supabaseAnonKey = (key || DEFAULT_SUPABASE_KEY).trim().replace(/^["']|["']$/g, '');
             localStorage.setItem(`${CONFIG_STORAGE_KEY}_url`, this.supabaseUrl);
             localStorage.setItem(`${CONFIG_STORAGE_KEY}_key`, this.supabaseAnonKey);
         },
@@ -296,26 +311,18 @@
 
     const TeamService = {
         async getAllMembers() {
-            const cached = localStorage.getItem(TEAM_STORAGE_KEY);
-            if (cached !== null) {
-                try {
-                    const parsed = JSON.parse(cached);
-                    if (Array.isArray(parsed)) {
-                        return parsed;
-                    }
-                } catch (e) {}
-            }
-
             const client = SupabaseManager.getClient();
             if (client) {
                 try {
                     const { data, error } = await Promise.race([
                         client.from('sales_team').select('*').order('created_at', { ascending: true }),
-                        new Promise((_, r) => setTimeout(() => r(new Error('Timeout')), 3000))
+                        new Promise((_, r) => setTimeout(() => r(new Error('Timeout')), 4000))
                     ]);
 
                     if (!error && Array.isArray(data) && data.length > 0) {
-                        localStorage.setItem(TEAM_STORAGE_KEY, JSON.stringify(data));
+                        try {
+                            localStorage.setItem(TEAM_STORAGE_KEY, JSON.stringify(data));
+                        } catch (e) {}
                         return data;
                     }
                 } catch (e) {
@@ -323,7 +330,19 @@
                 }
             }
 
-            localStorage.setItem(TEAM_STORAGE_KEY, JSON.stringify(DEFAULT_MEMBERS));
+            const cached = localStorage.getItem(TEAM_STORAGE_KEY);
+            if (cached !== null) {
+                try {
+                    const parsed = JSON.parse(cached);
+                    if (Array.isArray(parsed) && parsed.length > 0) {
+                        return parsed;
+                    }
+                } catch (e) {}
+            }
+
+            try {
+                localStorage.setItem(TEAM_STORAGE_KEY, JSON.stringify(DEFAULT_MEMBERS));
+            } catch (e) {}
             return DEFAULT_MEMBERS;
         },
 
@@ -2373,18 +2392,50 @@ CREATE POLICY "Public access to warehouse photos" ON storage.objects FOR ALL TO 
         window.renderLedgerTable();
         PartyService.renderPartyControls();
 
-        // Non-blocking background Supabase connection test
+        // Non-blocking background Supabase connection test & live data sync
         SupabaseManager.testConnection().then(async (test) => {
             updateBadgeState(test.success, test.success ? 'Connected (Live Supabase)' : 'Demo Mode (Offline)');
             if (test.success) {
-                const raw = localStorage.getItem(TEAM_STORAGE_KEY);
-                if (raw === null) {
-                    state.teamMembers = await TeamService.getAllMembers();
-                    window.renderTeamDirectory();
-                    populateUploaderDropdown();
+                try {
+                    const cloudMembers = await TeamService.getAllMembers();
+                    if (Array.isArray(cloudMembers) && cloudMembers.length > 0) {
+                        state.teamMembers = cloudMembers;
+                        window.renderTeamDirectory();
+                        populateUploaderDropdown();
+                    }
+                } catch (e) {
+                    console.warn('[initApp] Cloud team fetch note:', e);
+                }
+
+                try {
+                    const cloudCartons = await DispatchService.getAllCartons();
+                    if (Array.isArray(cloudCartons)) {
+                        state.allCartons = cloudCartons;
+                        window.renderLedgerTable();
+                    }
+                } catch (e) {
+                    console.warn('[initApp] Cloud cartons fetch note:', e);
                 }
             }
         });
+
+        // Continuous cross-device live sync loop (every 25 seconds)
+        setInterval(async () => {
+            if (!AppConfig.isConfigured()) return;
+            try {
+                const cloudMembers = await TeamService.getAllMembers();
+                if (Array.isArray(cloudMembers) && cloudMembers.length > 0) {
+                    state.teamMembers = cloudMembers;
+                    if (state.activeTab === 'settings') window.renderTeamDirectory();
+                    populateUploaderDropdown();
+                }
+                const cloudCartons = await DispatchService.getAllCartons();
+                if (Array.isArray(cloudCartons)) {
+                    state.allCartons = cloudCartons;
+                    if (state.activeTab === 'ledger') window.renderLedgerTable();
+                }
+            } catch (e) {}
+        }, 25000);
 
         // Save party name on blur if entered
         document.getElementById('inputPartyName')?.addEventListener('blur', () => {
