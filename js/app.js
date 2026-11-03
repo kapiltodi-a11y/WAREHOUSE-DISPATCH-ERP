@@ -296,28 +296,31 @@
 
     const TeamService = {
         async getAllMembers() {
+            const cached = localStorage.getItem(TEAM_STORAGE_KEY);
+            if (cached !== null) {
+                try {
+                    const parsed = JSON.parse(cached);
+                    if (Array.isArray(parsed)) {
+                        return parsed;
+                    }
+                } catch (e) {}
+            }
+
             const client = SupabaseManager.getClient();
             if (client) {
                 try {
-                    const { data, error } = await client
-                        .from('sales_team')
-                        .select('*')
-                        .order('created_at', { ascending: true });
+                    const { data, error } = await Promise.race([
+                        client.from('sales_team').select('*').order('created_at', { ascending: true }),
+                        new Promise((_, r) => setTimeout(() => r(new Error('Timeout')), 3000))
+                    ]);
 
                     if (!error && Array.isArray(data) && data.length > 0) {
                         localStorage.setItem(TEAM_STORAGE_KEY, JSON.stringify(data));
                         return data;
                     }
                 } catch (e) {
-                    console.warn('[TeamService] Supabase team fetch error:', e);
+                    console.warn('[TeamService] Supabase team fetch note:', e);
                 }
-            }
-
-            const cached = localStorage.getItem(TEAM_STORAGE_KEY);
-            if (cached) {
-                try {
-                    return JSON.parse(cached);
-                } catch (e) {}
             }
 
             localStorage.setItem(TEAM_STORAGE_KEY, JSON.stringify(DEFAULT_MEMBERS));
@@ -338,46 +341,222 @@
                 created_at: new Date().toISOString()
             };
 
-            const client = SupabaseManager.getClient();
-            if (client) {
-                try {
-                    const { data, error } = await client
-                        .from('sales_team')
-                        .insert([{
-                            name: newMember.name,
-                            role: newMember.role,
-                            email: newMember.email,
-                            phone: newMember.phone,
-                            employee_id: newMember.employee_id,
-                            is_active: true
-                        }])
-                        .select()
-                        .single();
+            // Local state updated first
+            state.teamMembers = state.teamMembers || [];
+            state.teamMembers.push(newMember);
+            localStorage.setItem(TEAM_STORAGE_KEY, JSON.stringify(state.teamMembers));
 
-                    if (!error && data) newMember.id = data.id;
-                } catch (e) {
-                    console.warn('[TeamService] Insert fallback:', e);
-                }
-            }
+            // Background cloud sync
+            this.syncAddToCloud(newMember);
 
-            const members = await this.getAllMembers();
-            members.push(newMember);
-            localStorage.setItem(TEAM_STORAGE_KEY, JSON.stringify(members));
             return newMember;
         },
 
         async deleteMember(id) {
             if (!id) return false;
-            const client = SupabaseManager.getClient();
-            if (client) {
-                try {
-                    await client.from('sales_team').delete().eq('id', id);
-                } catch (e) {}
-            }
-            let members = await this.getAllMembers();
-            members = members.filter(m => m.id !== id);
-            localStorage.setItem(TEAM_STORAGE_KEY, JSON.stringify(members));
+            let memberName = '';
+            state.teamMembers = (state.teamMembers || []).filter(m => {
+                if (m.id === id) {
+                    memberName = m.name;
+                    return false;
+                }
+                return true;
+            });
+            localStorage.setItem(TEAM_STORAGE_KEY, JSON.stringify(state.teamMembers));
+
+            // Background cloud sync
+            this.syncDeleteToCloud(id, memberName);
             return true;
+        },
+
+        async syncAddToCloud(member) {
+            const client = SupabaseManager.getClient();
+            if (!client) return;
+            try {
+                const { data, error } = await Promise.race([
+                    client.from('sales_team').insert([{
+                        name: member.name,
+                        role: member.role,
+                        email: member.email,
+                        phone: member.phone,
+                        employee_id: member.employee_id,
+                        is_active: true
+                    }]).select().single(),
+                    new Promise((_, r) => setTimeout(() => r(new Error('Cloud sync timeout')), 4000))
+                ]);
+                if (!error && data && data.id) {
+                    member.id = data.id;
+                    localStorage.setItem(TEAM_STORAGE_KEY, JSON.stringify(state.teamMembers));
+                }
+            } catch (e) {
+                console.warn('[TeamService] Cloud add sync note:', e);
+            }
+        },
+
+        async syncDeleteToCloud(id, name) {
+            const client = SupabaseManager.getClient();
+            if (!client) return;
+            try {
+                const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+                if (isUuid) {
+                    await Promise.race([
+                        client.from('sales_team').delete().eq('id', id),
+                        new Promise((_, r) => setTimeout(() => r(new Error('Timeout')), 3000))
+                    ]);
+                } else if (name) {
+                    await Promise.race([
+                        client.from('sales_team').delete().eq('name', name),
+                        new Promise((_, r) => setTimeout(() => r(new Error('Timeout')), 3000))
+                    ]);
+                }
+            } catch (e) {
+                console.warn('[TeamService] Cloud delete sync note:', e);
+            }
+        }
+    };
+
+    // --------------------------------------------------------------------------
+    // 3.5. PARTY NAMES SERVICE (AUTOCOMPLETE, DROPDOWN & PERSISTENCE)
+    // --------------------------------------------------------------------------
+    const PARTY_STORAGE_KEY = 'warehouse_party_names';
+    const DEFAULT_PARTIES = [
+        'Apex Electricals Pvt Ltd',
+        'Metro Fan & Appliances',
+        'Royal Electronics Delhi',
+        'Shree Ganesh Traders'
+    ];
+
+    const PartyService = {
+        getAllParties() {
+            let saved = [];
+            try {
+                const raw = localStorage.getItem(PARTY_STORAGE_KEY);
+                if (raw) saved = JSON.parse(raw);
+            } catch (e) {}
+
+            const fromCartons = (state.allCartons || [])
+                .map(c => (c.customer_name || '').trim())
+                .filter(Boolean);
+
+            const all = Array.from(new Set([...DEFAULT_PARTIES, ...saved, ...fromCartons]))
+                .filter(Boolean)
+                .sort((a, b) => a.localeCompare(b));
+
+            return all;
+        },
+
+        saveParty(partyName) {
+            if (!partyName || !partyName.trim()) return;
+            const clean = partyName.trim();
+            const current = this.getAllParties();
+            if (!current.includes(clean)) {
+                current.push(clean);
+                current.sort((a, b) => a.localeCompare(b));
+            }
+            try {
+                localStorage.setItem(PARTY_STORAGE_KEY, JSON.stringify(current));
+            } catch (e) {}
+            this.renderPartyControls();
+        },
+
+        removeParty(partyName, event) {
+            if (event) event.stopPropagation();
+            const clean = (partyName || '').trim();
+            let saved = [];
+            try {
+                const raw = localStorage.getItem(PARTY_STORAGE_KEY);
+                if (raw) saved = JSON.parse(raw);
+            } catch (e) {}
+            saved = saved.filter(p => p.toLowerCase() !== clean.toLowerCase());
+            try {
+                localStorage.setItem(PARTY_STORAGE_KEY, JSON.stringify(saved));
+            } catch (e) {}
+            this.renderPartyControls();
+        },
+
+        renderPartyControls() {
+            const parties = this.getAllParties();
+            const inputVal = (document.getElementById('inputPartyName')?.value || '').toLowerCase().trim();
+
+            // 1. Datalist for native autocomplete
+            const datalist = document.getElementById('partyNameDatalist');
+            if (datalist) {
+                datalist.innerHTML = parties.map(p => `<option value="${escapeHtml(p)}">`).join('');
+            }
+
+            // 2. Count text in button
+            const countText = document.getElementById('partyCountText');
+            if (countText) countText.textContent = parties.length;
+
+            // 3. Dropdown list items
+            const dropdownList = document.getElementById('partyDropdownList');
+            if (dropdownList) {
+                const filteredParties = inputVal
+                    ? parties.filter(p => p.toLowerCase().includes(inputVal))
+                    : parties;
+
+                if (filteredParties.length === 0) {
+                    dropdownList.innerHTML = `
+                        <div class="px-3 py-3 text-center text-xs text-slate-400">
+                            No matching saved party. Type to add a new one.
+                        </div>
+                    `;
+                } else {
+                    dropdownList.innerHTML = filteredParties.map(party => {
+                        const cartonCount = (state.allCartons || []).filter(c => (c.customer_name || '').toLowerCase() === party.toLowerCase()).length;
+                        const safeParty = escapeHtml(party).replace(/'/g, "\\'");
+                        return `
+                            <div onclick="window.selectPartyName('${safeParty}')" class="px-3 py-2 hover:bg-emerald-50 cursor-pointer flex items-center justify-between group transition-colors">
+                                <div class="flex items-center gap-2">
+                                    <div class="w-6 h-6 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center text-xs font-bold">
+                                        <i data-lucide="building" class="w-3.5 h-3.5"></i>
+                                    </div>
+                                    <span class="text-xs font-semibold text-slate-800 group-hover:text-emerald-900">${escapeHtml(party)}</span>
+                                </div>
+                                <div class="flex items-center gap-1.5">
+                                    <span class="text-[10px] text-slate-400 bg-slate-100 group-hover:bg-emerald-100 group-hover:text-emerald-800 px-2 py-0.5 rounded-full font-medium">
+                                        ${cartonCount > 0 ? `${cartonCount} cartons` : 'Saved'}
+                                    </span>
+                                    <button type="button" onclick="window.deletePartyName('${safeParty}', event)" class="opacity-0 group-hover:opacity-100 p-1 text-slate-300 hover:text-rose-600 rounded transition-all" title="Remove from list">
+                                        <i data-lucide="x" class="w-3 h-3"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        `;
+                    }).join('');
+                }
+            }
+
+            // 4. Quick pick chips under input
+            const chipsContainer = document.getElementById('partyQuickChips');
+            if (chipsContainer) {
+                const topParties = parties.slice(0, 5);
+                chipsContainer.innerHTML = `
+                    <span class="text-[10px] font-bold uppercase tracking-wider text-slate-400 shrink-0">Quick Pick:</span>
+                    ${topParties.map(p => {
+                        const safeP = escapeHtml(p).replace(/'/g, "\\'");
+                        return `
+                            <button type="button" onclick="window.selectPartyName('${safeP}')" class="px-2.5 py-1 bg-slate-100 hover:bg-emerald-100 text-slate-700 hover:text-emerald-800 font-medium rounded-lg text-xs whitespace-nowrap transition-colors border border-slate-200 hover:border-emerald-300">
+                                ${escapeHtml(p)}
+                            </button>
+                        `;
+                    }).join('')}
+                `;
+            }
+
+            // 5. Ledger Filter Dropdown
+            const filterSelect = document.getElementById('filterPartySelect');
+            if (filterSelect) {
+                const currentVal = filterSelect.value;
+                filterSelect.innerHTML = `
+                    <option value="">All Parties (${parties.length})</option>
+                    ${parties.map(p => `<option value="${escapeHtml(p)}" ${p === currentVal ? 'selected' : ''}>${escapeHtml(p)}</option>`).join('')}
+                `;
+            }
+
+            if (window.lucide && typeof window.lucide.createIcons === 'function') {
+                window.lucide.createIcons();
+            }
         }
     };
 
@@ -1116,9 +1295,11 @@
             });
 
             showToast(`Successfully saved ${state.currentCartonRows.length} cartons for AWB ${awb}!`, 'success');
+            PartyService.saveParty(party);
             window.resetDispatchForm();
 
             state.allCartons = await DispatchService.getAllCartons();
+            PartyService.renderPartyControls();
             window.switchTab('ledger');
         } catch (err) {
             console.error('Submit error:', err);
@@ -1146,6 +1327,56 @@
 
         window.generateCartonRows();
         updateBatchIdPreview();
+        window.closePartyDropdown();
+    };
+
+    // --------------------------------------------------------------------------
+    // 8.5. PARTY NAMES DROPDOWN CONTROLS
+    // --------------------------------------------------------------------------
+    window.openPartyDropdown = function () {
+        PartyService.renderPartyControls();
+        const menu = document.getElementById('partyDropdownMenu');
+        if (menu) menu.classList.remove('hidden');
+    };
+
+    window.closePartyDropdown = function () {
+        const menu = document.getElementById('partyDropdownMenu');
+        if (menu) menu.classList.add('hidden');
+    };
+
+    window.togglePartyDropdown = function (event) {
+        if (event) event.stopPropagation();
+        const menu = document.getElementById('partyDropdownMenu');
+        if (!menu) return;
+        if (menu.classList.contains('hidden')) {
+            window.openPartyDropdown();
+        } else {
+            window.closePartyDropdown();
+        }
+    };
+
+    window.handlePartyInput = function (event) {
+        updateBatchIdPreview();
+        PartyService.renderPartyControls();
+        const menu = document.getElementById('partyDropdownMenu');
+        if (menu && menu.classList.contains('hidden')) {
+            menu.classList.remove('hidden');
+        }
+    };
+
+    window.selectPartyName = function (partyName) {
+        const input = document.getElementById('inputPartyName');
+        if (input) {
+            input.value = partyName;
+            input.focus();
+        }
+        window.closePartyDropdown();
+        updateBatchIdPreview();
+        PartyService.saveParty(partyName);
+    };
+
+    window.deletePartyName = function (partyName, event) {
+        PartyService.removeParty(partyName, event);
     };
 
     // --------------------------------------------------------------------------
@@ -1159,6 +1390,7 @@
 
         const searchTerm = (document.getElementById('ledgerSearchInput')?.value || '').toLowerCase().trim();
         const filterDate = document.getElementById('filterDateInput')?.value || '';
+        const filterParty = document.getElementById('filterPartySelect')?.value || '';
         const filterUploader = document.getElementById('filterUploaderSelect')?.value || '';
 
         const filtered = state.allCartons.filter(item => {
@@ -1172,6 +1404,7 @@
                 if (!match) return false;
             }
             if (filterDate && item.dispatch_date !== filterDate) return false;
+            if (filterParty && item.customer_name !== filterParty) return false;
             if (filterUploader && item.uploaded_by !== filterUploader) return false;
             return true;
         });
@@ -1303,9 +1536,11 @@
     window.clearLedgerFilters = function () {
         const s = document.getElementById('ledgerSearchInput');
         const d = document.getElementById('filterDateInput');
+        const p = document.getElementById('filterPartySelect');
         const u = document.getElementById('filterUploaderSelect');
         if (s) s.value = '';
         if (d) d.value = '';
+        if (p) p.value = '';
         if (u) u.value = '';
         window.renderLedgerTable();
     };
@@ -1482,7 +1717,7 @@
                     <div class="text-[10px] text-slate-400">${escapeHtml(m.email || '')}</div>
                 </td>
                 <td class="py-3 px-4 text-center">
-                    <button onclick="window.handleDeleteMember('${m.id}', '${escapeHtml(m.name)}')" class="p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition-colors" title="Delete Team Member">
+                    <button onclick="window.handleDeleteMember('${m.id}')" class="p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer" title="Delete Team Member">
                         <i data-lucide="trash" class="w-4 h-4"></i>
                     </button>
                 </td>
@@ -1495,23 +1730,43 @@
     };
 
     window.openAddMemberModal = function () {
-        document.getElementById('addMemberModal')?.classList.remove('hidden');
+        const modal = document.getElementById('addMemberModal');
+        if (modal) {
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+            modal.style.display = 'flex';
+            setTimeout(() => {
+                document.getElementById('newMemberName')?.focus();
+            }, 60);
+        }
     };
 
     window.closeAddMemberModal = function () {
-        document.getElementById('addMemberModal')?.classList.add('hidden');
+        const modal = document.getElementById('addMemberModal');
+        if (modal) {
+            modal.classList.remove('flex');
+            modal.classList.add('hidden');
+            modal.style.display = 'none';
+        }
     };
 
     window.handleAddMemberSubmit = async function (e) {
-        e.preventDefault();
-        const name = document.getElementById('newMemberName')?.value;
-        const role = document.getElementById('newMemberRole')?.value;
-        const empId = document.getElementById('newMemberEmpId')?.value;
-        const phone = document.getElementById('newMemberPhone')?.value;
-        const email = document.getElementById('newMemberEmail')?.value;
+        if (e && e.preventDefault) e.preventDefault();
+        const nameInput = document.getElementById('newMemberName');
+        const roleInput = document.getElementById('newMemberRole');
+        const empIdInput = document.getElementById('newMemberEmpId');
+        const phoneInput = document.getElementById('newMemberPhone');
+        const emailInput = document.getElementById('newMemberEmail');
 
-        if (!name || !name.trim()) {
+        const name = (nameInput?.value || '').trim();
+        const role = (roleInput?.value || 'Sales Representative').trim();
+        const empId = (empIdInput?.value || '').trim() || `EMP-${Math.floor(100 + Math.random() * 900)}`;
+        const phone = (phoneInput?.value || '').trim();
+        const email = (emailInput?.value || '').trim();
+
+        if (!name) {
             showToast('Member name is required.', 'error');
+            nameInput?.focus();
             return;
         }
 
@@ -1520,7 +1775,6 @@
             showToast(`Added ${name} to team!`, 'success');
             window.closeAddMemberModal();
             document.getElementById('addMemberForm')?.reset();
-            state.teamMembers = await TeamService.getAllMembers();
             window.renderTeamDirectory();
             populateUploaderDropdown();
         } catch (err) {
@@ -1528,11 +1782,13 @@
         }
     };
 
-    window.handleDeleteMember = async function (id, name) {
-        if (!confirm(`Remove "${name}" from the sales team?`)) return;
+    window.handleDeleteMember = async function (id) {
+        const member = (state.teamMembers || []).find(m => m.id === id);
+        const name = member ? member.name : 'this member';
+        if (!confirm(`Are you sure you want to remove "${name}" from the sales team?`)) return;
+
         await TeamService.deleteMember(id);
         showToast(`Removed ${name}.`, 'success');
-        state.teamMembers = await TeamService.getAllMembers();
         window.renderTeamDirectory();
         populateUploaderDropdown();
     };
@@ -1956,6 +2212,39 @@ CREATE POLICY "Public access to warehouse photos" ON storage.objects FOR ALL TO 
         window.generateCartonRows();
         window.renderLedgerTable();
         window.renderTeamDirectory();
+        PartyService.renderPartyControls();
+
+        // Save party name on blur if entered
+        document.getElementById('inputPartyName')?.addEventListener('blur', () => {
+            const val = document.getElementById('inputPartyName')?.value.trim();
+            if (val) {
+                PartyService.saveParty(val);
+            }
+        });
+
+        // Close party dropdown when clicking outside
+        document.addEventListener('click', (e) => {
+            const container = document.getElementById('partyFieldContainer');
+            if (container && !container.contains(e.target)) {
+                window.closePartyDropdown();
+            }
+        });
+
+        // Close Add Member modal when clicking outside content box
+        document.getElementById('addMemberModal')?.addEventListener('click', (e) => {
+            if (e.target.id === 'addMemberModal') {
+                window.closeAddMemberModal();
+            }
+        });
+
+        // Close modals on Escape key
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                window.closeAddMemberModal();
+                window.closeLightbox();
+                window.closePartyDropdown();
+            }
+        });
 
         document.getElementById('inputAwbNumber')?.addEventListener('input', () => {
             updateBatchIdPreview();

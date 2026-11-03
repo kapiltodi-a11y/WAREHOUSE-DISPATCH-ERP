@@ -165,12 +165,56 @@
                         <p class="text-[10px] text-slate-400 mt-1">Unique ID prefix for cartons</p>
                     </div>
 
-                    <!-- Column 4: Name of Party -->
-                    <div>
-                        <label for="inputPartyName" class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                            4. Name of Party <span class="text-rose-500">*</span>
-                        </label>
-                        <input type="text" id="inputPartyName" placeholder="e.g. Apex Electricals" class="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-sm font-medium focus:ring-2 focus:ring-emerald-500 focus:bg-white outline-none transition-all">
+                    <!-- Column 4: Name of Party with Dropdown Menu -->
+                    <div class="relative" id="partyFieldContainer">
+                        <div class="flex items-center justify-between mb-1.5">
+                            <label for="inputPartyName" class="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                                4. Name of Party <span class="text-rose-500">*</span>
+                            </label>
+                            <button type="button" onclick="window.togglePartyDropdown(event)" class="text-[11px] font-semibold text-emerald-700 hover:text-emerald-800 flex items-center gap-1 hover:underline">
+                                <i data-lucide="chevron-down" class="w-3.5 h-3.5"></i> Saved Parties (<span id="partyCountText">0</span>)
+                            </button>
+                        </div>
+                        
+                        <div class="relative">
+                            <input type="text" 
+                                id="inputPartyName" 
+                                list="partyNameDatalist"
+                                placeholder="Type new or select from dropdown..." 
+                                autocomplete="off"
+                                onfocus="window.openPartyDropdown()"
+                                oninput="window.handlePartyInput(event)"
+                                class="w-full bg-slate-50 border border-slate-300 rounded-xl pl-3 pr-10 py-2.5 text-sm font-medium focus:ring-2 focus:ring-emerald-500 focus:bg-white outline-none transition-all">
+                            
+                            <button type="button" 
+                                onclick="window.togglePartyDropdown(event)" 
+                                class="absolute right-2 top-2 p-1.5 text-slate-400 hover:text-emerald-700 hover:bg-slate-200/60 rounded-lg transition-all" 
+                                title="Open Party Dropdown Menu">
+                                <i data-lucide="chevron-down" class="w-4 h-4"></i>
+                            </button>
+
+                            <!-- Native HTML5 Datalist for universal autocomplete -->
+                            <datalist id="partyNameDatalist"></datalist>
+
+                            <!-- Custom Interactive Dropdown Menu -->
+                            <div id="partyDropdownMenu" class="hidden absolute z-30 left-0 right-0 mt-1.5 bg-white border border-slate-200 rounded-xl shadow-2xl max-h-64 overflow-y-auto divide-y divide-slate-100">
+                                <div class="p-2.5 bg-slate-50 sticky top-0 flex items-center justify-between border-b border-slate-200 text-xs font-bold text-slate-700">
+                                    <span class="flex items-center gap-1.5">
+                                        <i data-lucide="building-2" class="w-3.5 h-3.5 text-emerald-600"></i>
+                                        Select Party Name
+                                    </span>
+                                    <span class="text-[10px] font-normal text-slate-400">Click to select</span>
+                                </div>
+                                <div id="partyDropdownList" class="py-1">
+                                    <!-- Populated dynamically -->
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Quick-Pick Chips -->
+                        <div class="mt-2 flex items-center gap-1.5 overflow-x-auto pb-0.5" id="partyQuickChips">
+                            <!-- Populated with recent party chips -->
+                        </div>
                     </div>
                 </div>
 
@@ -264,10 +308,14 @@
                     <input type="text" id="ledgerSearchInput" oninput="window.renderLedgerTable()" placeholder="Search AWB, Unique ID, Party, Fan Name..." class="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 focus:bg-white outline-none">
                 </div>
 
-                <!-- Date Range & Uploader Filters -->
+                <!-- Date Range, Party & Uploader Filters -->
                 <div class="flex flex-wrap items-center gap-2">
                     <input type="date" id="filterDateInput" onchange="window.renderLedgerTable()" class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-700 outline-none">
                     
+                    <select id="filterPartySelect" onchange="window.renderLedgerTable()" class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-700 outline-none">
+                        <option value="">All Parties</option>
+                    </select>
+
                     <select id="filterUploaderSelect" onchange="window.renderLedgerTable()" class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-700 outline-none">
                         <option value="">All Uploaders</option>
                     </select>
@@ -518,7 +566,7 @@
     </div>
 
     <!-- Add Sales Team Member Modal -->
-    <div id="addMemberModal" class="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs hidden flex items-center justify-center p-4">
+    <div id="addMemberModal" class="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm hidden items-center justify-center p-4">
         <div class="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
             <div class="flex items-center justify-between pb-3 border-b border-slate-100">
                 <h3 class="font-bold text-base text-slate-900 flex items-center gap-2">
