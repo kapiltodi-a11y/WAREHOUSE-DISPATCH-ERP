@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Warehouse ERP - Dispatch & Carton Tracking System</title>
+    
+    <!-- Google Fonts (Inter) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                    colors: {
+                        brand: {
+                            50: '#f0fdf4',
+                            100: '#dcfce7',
+                            500: '#22c55e',
+                            600: '#16a34a',
+                            700: '#15803d',
+                            800: '#166534',
+                            900: '#14532d',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+
+    <!-- Lucide Icons CDN -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <!-- Supabase JS Client CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+    <!-- SheetJS for Excel (.xlsx) Export -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+    <!-- Custom Styles -->
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body class="bg-slate-50 text-slate-900 min-h-screen flex flex-col font-sans antialiased">
+
+    <!-- Top Navigation Header -->
+    <header class="bg-white border-b border-slate-200 sticky top-0 z-40 shadow-sm">
+        <div class="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+            <div class="flex items-center space-x-3">
+                <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-brand-700 to-emerald-500 flex items-center justify-center text-white shadow-md shadow-emerald-600/20">
+                    <i data-lucide="package-check" class="w-5 h-5"></i>
+                </div>
+                <div>
+                    <h1 class="font-bold text-lg leading-tight text-slate-900 flex items-center gap-2">
+                        Warehouse ERP
+                        <span id="connectionBadge" class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800">
+                            <span class="w-1.5 h-1.5 rounded-full bg-amber-500 mr-1 animate-pulse"></span> Demo Mode
+                        </span>
+                    </h1>
+                    <p class="text-xs text-slate-500">Carton Dispatch & Fan Inventory Management</p>
+                </div>
+            </div>
+
+            <!-- Desktop Tab Buttons -->
+            <nav class="hidden md:flex items-center space-x-1 bg-slate-100 p-1 rounded-xl">
+                <button id="tabBtnNewDispatch" onclick="window.switchTab('new-dispatch')" class="tab-btn px-4 py-2 rounded-lg text-sm font-semibold transition-all bg-white text-emerald-700 shadow-sm flex items-center gap-2">
+                    <i data-lucide="plus-circle" class="w-4 h-4"></i> New Dispatch Entry
+                </button>
+                <button id="tabBtnLedger" onclick="window.switchTab('ledger')" class="tab-btn px-4 py-2 rounded-lg text-sm font-medium transition-all text-slate-600 hover:text-slate-900 flex items-center gap-2">
+                    <i data-lucide="table" class="w-4 h-4"></i> Cartons Ledger
+                </button>
+                <button id="tabBtnSettings" onclick="window.switchTab('settings')" class="tab-btn px-4 py-2 rounded-lg text-sm font-medium transition-all text-slate-600 hover:text-slate-900 flex items-center gap-2">
+                    <i data-lucide="settings" class="w-4 h-4"></i> Settings
+                </button>
+            </nav>
+
+            <!-- Quick Action / Excel Download -->
+            <div class="flex items-center space-x-2">
+                <button onclick="window.exportCurrentLedger()" class="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white font-medium text-xs flex items-center gap-1.5 shadow-sm transition-all" title="Export Ledger to Excel (.xlsx)">
+                    <i data-lucide="file-spreadsheet" class="w-4 h-4"></i>
+                    <span class="hidden sm:inline">Export Excel</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- Mobile Navigation Strip -->
+        <div class="md:hidden flex border-t border-slate-200 bg-slate-100/70 p-1">
+            <button onclick="window.switchTab('new-dispatch')" id="mobTabNew" class="flex-1 py-2 text-xs font-semibold text-center rounded-lg bg-white text-emerald-700 shadow-xs flex items-center justify-center gap-1">
+                <i data-lucide="plus-circle" class="w-3.5 h-3.5"></i> New Entry
+            </button>
+            <button onclick="window.switchTab('ledger')" id="mobTabLedger" class="flex-1 py-2 text-xs font-medium text-center rounded-lg text-slate-600 flex items-center justify-center gap-1">
+                <i data-lucide="table" class="w-3.5 h-3.5"></i> Ledger
+            </button>
+            <button onclick="window.switchTab('settings')" id="mobTabSettings" class="flex-1 py-2 text-xs font-medium text-center rounded-lg text-slate-600 flex items-center justify-center gap-1">
+                <i data-lucide="settings" class="w-3.5 h-3.5"></i> Settings
+            </button>
+        </div>
+    </header>
+
+    <!-- Main Container -->
+    <main class="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6">
+
+        <!-- ========================================================================= -->
+        <!-- TAB 1: NEW DISPATCH ENTRY FORM (CARTON BUILDER WITH MANDATORY IMAGES) -->
+        <!-- ========================================================================= -->
+        <section id="paneNewDispatch" class="tab-pane active max-w-4xl mx-auto space-y-6">
+            
+            <!-- Header Banner -->
+            <div class="bg-gradient-to-r from-emerald-800 to-teal-700 rounded-2xl p-6 text-white shadow-lg shadow-emerald-900/10">
+                <div class="flex items-center justify-between mb-3">
+                    <div class="flex items-center space-x-2 text-emerald-100 text-sm">
+                        <i data-lucide="truck" class="w-5 h-5"></i>
+                        <span class="font-semibold uppercase tracking-wider text-xs">Warehouse Outward Dispatch</span>
+                    </div>
+                    <span id="liveClock" class="text-xs bg-white/20 px-3 py-1 rounded-full font-mono"></span>
+                </div>
+                <h2 class="text-xl sm:text-2xl font-bold tracking-tight">Create Carton Dispatch Batch</h2>
+                <p class="text-xs sm:text-sm text-emerald-100 mt-1">
+                    Enter AWB and total carton count. Unique IDs (<code class="bg-black/20 px-1 py-0.5 rounded text-white font-mono">AWB+C1</code>, <code class="bg-black/20 px-1 py-0.5 rounded text-white font-mono">AWB+C2</code>...) and carton photo slots generate automatically.
+                </p>
+            </div>
+
+            <!-- Step 1: Shipment Batch Information -->
+            <div class="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-5">
+                <div class="flex items-center justify-between pb-3 border-b border-slate-100">
+                    <div class="flex items-center space-x-2">
+                        <span class="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold text-xs">1</span>
+                        <h3 class="font-bold text-slate-900 text-base">Shipment & Consignee Details</h3>
+                    </div>
+                    <span class="text-xs text-slate-400 font-medium">Shipment overview</span>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                    <!-- Column 1: Date -->
+                    <div>
+                        <label for="inputDispatchDate" class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                            1. Dispatch Date <span class="text-rose-500">*</span>
+                        </label>
+                        <input type="date" id="inputDispatchDate" class="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-sm font-medium focus:ring-2 focus:ring-emerald-500 focus:bg-white outline-none transition-all">
+                    </div>
+
+                    <!-- Column 2: Total Number of Cartons -->
+                    <div>
+                        <label for="inputTotalCartons" class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                            2. Total Cartons <span class="text-rose-500">*</span>
+                        </label>
+                        <div class="relative">
+                            <input type="number" id="inputTotalCartons" min="1" max="50" value="4" class="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-sm font-bold text-emerald-700 focus:ring-2 focus:ring-emerald-500 focus:bg-white outline-none transition-all">
+                            <span class="absolute right-3 top-2.5 text-xs text-slate-400 font-medium">Cartons</span>
+                        </div>
+                    </div>
+
+                    <!-- Column 3: AWB Number (Used to form Unique ID: [AWB]C1, [AWB]C2...) -->
+                    <div>
+                        <label for="inputAwbNumber" class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                            3. AWB / Docket No. <span class="text-rose-500">*</span>
+                        </label>
+                        <input type="text" id="inputAwbNumber" placeholder="e.g. 12345678" class="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-sm font-mono font-bold tracking-wider focus:ring-2 focus:ring-emerald-500 focus:bg-white outline-none uppercase transition-all">
+                        <p class="text-[10px] text-slate-400 mt-1">Unique ID prefix for cartons</p>
+                    </div>
+
+                    <!-- Column 4: Name of Party -->
+                    <div>
+                        <label for="inputPartyName" class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                            4. Name of Party <span class="text-rose-500">*</span>
+                        </label>
+                        <input type="text" id="inputPartyName" placeholder="e.g. Apex Electricals" class="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-sm font-medium focus:ring-2 focus:ring-emerald-500 focus:bg-white outline-none transition-all">
+                    </div>
+                </div>
+
+                <!-- Secondary Info: Uploaded By & Batch Unique ID Preview -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-slate-100">
+                    <div>
+                        <label for="selectUploadedBy" class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                            Uploaded By (Sales / Warehouse Team) <span class="text-rose-500">*</span>
+                        </label>
+                        <div class="flex items-center gap-2">
+                            <select id="selectUploadedBy" class="flex-1 bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-sm font-medium focus:ring-2 focus:ring-emerald-500 focus:bg-white outline-none">
+                                <option value="">-- Select Team Member --</option>
+                            </select>
+                            <button type="button" onclick="window.switchTab('settings')" class="p-2.5 text-slate-500 hover:text-emerald-700 bg-slate-100 hover:bg-slate-200 rounded-xl text-xs font-semibold" title="Manage Sales Team in Settings">
+                                <i data-lucide="user-plus" class="w-4 h-4"></i>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                            Generated Batch ID (Preview)
+                        </label>
+                        <div id="previewBatchUniqueId" class="w-full bg-slate-100 border border-slate-200 rounded-xl px-3 py-2.5 text-xs font-mono font-semibold text-slate-600 truncate flex items-center justify-between">
+                            <span>WH-YYYYMMDD-CUSTOMER-UPLOADER-AWB</span>
+                            <i data-lucide="fingerprint" class="w-4 h-4 text-slate-400"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Step 2: Dynamic Carton Breakdown & Fan Details -->
+            <div class="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-5">
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+                    <div class="flex items-center space-x-2">
+                        <span class="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold text-xs">2</span>
+                        <div>
+                            <h3 class="font-bold text-slate-900 text-base">Carton Breakdown & 15+ Photos Gallery</h3>
+                            <p class="text-xs text-slate-500">Upload at least 15 photos per unique ID directly via Camera 📷 or in Bulk 📁.</p>
+                        </div>
+                    </div>
+
+                    <!-- Quick Tools: Fill All & Batch Photo Upload -->
+                    <div class="flex items-center gap-2">
+                        <button type="button" onclick="window.copyFanNameToAll()" class="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all" title="Copy Carton 1 Fan Name to all remaining cartons">
+                            <i data-lucide="copy" class="w-3.5 h-3.5"></i> Copy Fan Name to All
+                        </button>
+                        <!-- Batch Image Input (up to 15 images) -->
+                        <label class="px-3 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-lg text-xs font-semibold cursor-pointer flex items-center gap-1 transition-all" title="Upload up to 15 images at once to auto-populate cartons">
+                            <i data-lucide="images" class="w-3.5 h-3.5"></i> Batch Upload (Up to 15)
+                            <input type="file" id="batchImageInput" multiple accept="image/*" class="hidden" onchange="window.handleBatchImageUpload(event)">
+                        </label>
+                    </div>
+                </div>
+
+                <!-- Carton List Container (Rendered dynamically) -->
+                <div id="cartonsContainer" class="space-y-4">
+                    <!-- Dynamic Carton Cards Injected Here -->
+                </div>
+            </div>
+
+            <!-- Submit Section -->
+            <div class="bg-white rounded-2xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 border border-slate-200 shadow-sm">
+                <div>
+                    <h4 class="text-sm font-bold text-slate-900">Record Warehouse Dispatch</h4>
+                    <p class="text-xs text-slate-500">Save carton entries directly into the warehouse ledger.</p>
+                </div>
+
+                <div class="flex items-center gap-3">
+                    <button type="button" onclick="window.resetDispatchForm()" class="px-4 py-2.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-sm font-semibold transition-all">
+                        Reset Form
+                    </button>
+                    <button type="button" id="submitDispatchBtn" onclick="window.handleDispatchSubmit()" class="px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white text-sm font-bold shadow-md shadow-emerald-600/20 flex items-center gap-2 transition-all">
+                        <i data-lucide="check-circle" class="w-4 h-4"></i> Save & Record Dispatches
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- ========================================================================= -->
+        <!-- TAB 2: CARTONS LEDGER TABLE (COLUMNS AS REQUIRED) -->
+        <!-- ========================================================================= -->
+        <section id="paneLedger" class="tab-pane space-y-5">
+            
+            <!-- Controls & Filters Strip -->
+            <div class="bg-white rounded-2xl p-4 sm:p-5 border border-slate-200 shadow-sm flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                
+                <!-- Search Box -->
+                <div class="relative flex-1 max-w-md">
+                    <i data-lucide="search" class="w-4 h-4 absolute left-3.5 top-3 text-slate-400"></i>
+                    <input type="text" id="ledgerSearchInput" oninput="window.renderLedgerTable()" placeholder="Search AWB, Unique ID, Party, Fan Name..." class="w-full pl-10 pr-4 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 focus:bg-white outline-none">
+                </div>
+
+                <!-- Date Range & Uploader Filters -->
+                <div class="flex flex-wrap items-center gap-2">
+                    <input type="date" id="filterDateInput" onchange="window.renderLedgerTable()" class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-700 outline-none">
+                    
+                    <select id="filterUploaderSelect" onchange="window.renderLedgerTable()" class="px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs font-medium text-slate-700 outline-none">
+                        <option value="">All Uploaders</option>
+                    </select>
+
+                    <button onclick="window.clearLedgerFilters()" class="px-3 py-2 text-xs font-semibold text-slate-500 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-xl transition-all">
+                        Clear Filters
+                    </button>
+
+                    <button onclick="window.exportCurrentLedger()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all">
+                        <i data-lucide="download" class="w-3.5 h-3.5"></i> Export Excel
+                    </button>
+                </div>
+            </div>
+
+            <!-- Ledger Table Container -->
+            <div class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden table-container">
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left border-collapse text-sm">
+                        <thead>
+                            <tr class="bg-slate-100/80 border-b border-slate-200 text-[11px] font-bold uppercase tracking-wider text-slate-600">
+                                <th class="py-3.5 px-4 w-12 text-center">#</th>
+                                <!-- 1st Column: Date -->
+                                <th class="py-3.5 px-4">1. Date</th>
+                                <!-- 2nd Column: Total number of cartons -->
+                                <th class="py-3.5 px-4 text-center">2. Total Cartons</th>
+                                <!-- 3rd Column: Unique ID (AWB + Carton Association e.g. 12345678C1) -->
+                                <th class="py-3.5 px-4">3. Unique ID (AWB)</th>
+                                <!-- 4th Column: Name of Party -->
+                                <th class="py-3.5 px-4">4. Name of Party</th>
+                                <!-- 5th Column: Fan Name -->
+                                <th class="py-3.5 px-4">5. Fan Name</th>
+                                <!-- 6th Column: Fan Name with Images -->
+                                <th class="py-3.5 px-4">6. Fan Image</th>
+                                <!-- Additional Warehouse Actions -->
+                                <th class="py-3.5 px-4 text-center">Status / Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="ledgerTableBody" class="divide-y divide-slate-100 text-slate-800">
+                            <!-- Rows injected dynamically -->
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Empty State -->
+                <div id="ledgerEmptyState" class="hidden p-12 text-center space-y-3">
+                    <div class="w-12 h-12 mx-auto rounded-full bg-slate-100 flex items-center justify-center text-slate-400">
+                        <i data-lucide="package-search" class="w-6 h-6"></i>
+                    </div>
+                    <h4 class="text-base font-bold text-slate-800">No Cartons Found</h4>
+                    <p class="text-xs text-slate-500 max-w-sm mx-auto">There are no carton dispatch records matching your search or filters. Click "New Dispatch Entry" to record your first batch.</p>
+                </div>
+
+                <!-- Footer Summary Strip -->
+                <div class="bg-slate-50 border-t border-slate-200 px-6 py-3 flex flex-col sm:flex-row sm:items-center justify-between text-xs text-slate-500 gap-2">
+                    <div id="ledgerSummaryStats" class="font-medium">
+                        Showing 0 cartons across 0 shipments
+                    </div>
+                    <div class="flex items-center gap-4">
+                        <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-emerald-500"></span> Dispatched</span>
+                        <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-amber-500"></span> Ready for Dispatch</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ========================================================================= -->
+        <!-- TAB 3: SETTINGS (ADD / DELETE SALES TEAM & SUPABASE CONFIG) -->
+        <!-- ========================================================================= -->
+        <section id="paneSettings" class="tab-pane max-w-4xl mx-auto space-y-6">
+            
+            <!-- Section 1: Sales Team Management -->
+            <div class="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-5">
+                <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100">
+                    <div>
+                        <h3 class="text-base sm:text-lg font-bold text-slate-900 flex items-center gap-2">
+                            <i data-lucide="users" class="w-5 h-5 text-emerald-600"></i>
+                            Sales & Warehouse Team Directory
+                        </h3>
+                        <p class="text-xs text-slate-500 mt-0.5">
+                            Add or delete team members who upload cartons and authorize dispatches.
+                        </p>
+                    </div>
+                    <button onclick="window.openAddMemberModal()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition-all">
+                        <i data-lucide="user-plus" class="w-4 h-4"></i> Add Team Member
+                    </button>
+                </div>
+
+                <!-- Team Directory Table -->
+                <div class="overflow-x-auto rounded-xl border border-slate-200">
+                    <table class="w-full text-left text-xs border-collapse">
+                        <thead>
+                            <tr class="bg-slate-100 text-slate-600 font-bold uppercase tracking-wider">
+                                <th class="py-3 px-4">Member Name</th>
+                                <th class="py-3 px-4">Role / Designation</th>
+                                <th class="py-3 px-4">Employee ID</th>
+                                <th class="py-3 px-4">Contact (Email & Phone)</th>
+                                <th class="py-3 px-4 text-center w-24">Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="teamDirectoryTableBody" class="divide-y divide-slate-100">
+                            <!-- Team members injected dynamically -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Section 2: Supabase Backend & Cloud Storage Settings -->
+            <div class="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm space-y-5">
+                <div class="flex items-center justify-between pb-3 border-b border-slate-100">
+                    <div class="flex items-center space-x-2">
+                        <div class="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
+                            <i data-lucide="database" class="w-4 h-4"></i>
+                        </div>
+                        <div>
+                            <h3 class="text-base font-bold text-slate-900">Supabase Cloud Database & Storage</h3>
+                            <p class="text-xs text-slate-500">Connect your Supabase project for real-time cloud sync and photo storage.</p>
+                        </div>
+                    </div>
+                    <span id="supabaseStatusPill" class="text-xs px-2.5 py-1 rounded-full font-bold bg-amber-100 text-amber-800">
+                        Demo Mode (Offline)
+                    </span>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                        <label for="inputSupabaseUrl" class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                            Supabase Project URL
+                        </label>
+                        <input type="text" id="inputSupabaseUrl" placeholder="https://your-project.supabase.co" class="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs font-mono focus:ring-2 focus:ring-emerald-500 focus:bg-white outline-none">
+                    </div>
+
+                    <div>
+                        <div class="flex items-center justify-between mb-1.5">
+                            <label for="inputSupabaseKey" class="block text-xs font-bold text-slate-700 uppercase tracking-wider">
+                                Supabase Anon Public API Key
+                            </label>
+                            <button type="button" onclick="window.toggleSupabaseKeyVisibility()" class="text-[10px] text-emerald-700 hover:underline font-semibold flex items-center gap-1">
+                                <span id="toggleKeyText">Show Key</span>
+                            </button>
+                        </div>
+                        <input type="password" id="inputSupabaseKey" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." class="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 text-xs font-mono focus:ring-2 focus:ring-emerald-500 focus:bg-white outline-none">
+                    </div>
+                </div>
+
+                <div class="flex flex-wrap items-center justify-between gap-3 pt-2">
+                    <div class="flex flex-wrap items-center gap-2">
+                        <button id="saveSupabaseBtn" onclick="window.saveSupabaseConfig()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 active:scale-95 text-white rounded-xl text-xs font-bold shadow-sm transition-all flex items-center gap-1.5">
+                            <i data-lucide="check" class="w-3.5 h-3.5"></i> Save & Test Connection
+                        </button>
+                        <button type="button" onclick="window.forceSaveSupabaseConfig()" class="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition-all" title="Save credentials and switch to Live Supabase immediately without testing">
+                            Save Directly
+                        </button>
+                        <button onclick="window.clearSupabaseConfig()" class="px-3 py-2 text-rose-600 hover:bg-rose-50 rounded-xl text-xs font-semibold transition-all">
+                            Disconnect
+                        </button>
+                    </div>
+
+                    <div class="flex items-center gap-3">
+                        <button type="button" onclick="window.copySchemaSql()" class="text-xs font-semibold text-emerald-700 hover:underline flex items-center gap-1">
+                            <i data-lucide="copy" class="w-3.5 h-3.5"></i> Copy schema.sql
+                        </button>
+                        <a href="supabase/schema.sql" target="_blank" download class="text-xs font-semibold text-slate-500 hover:text-slate-800 hover:underline flex items-center gap-1">
+                            <i data-lucide="download" class="w-3.5 h-3.5"></i> Download schema.sql
+                        </a>
+                    </div>
+                </div>
+
+                <!-- Inline Connection Status & Diagnostics Box -->
+                <div id="supabaseConnectionStatusBox" class="hidden rounded-xl p-3.5 text-xs transition-all space-y-2"></div>
+            </div>
+
+            <!-- Section 3: GitHub Deployment Information -->
+            <div class="bg-slate-900 text-slate-100 rounded-2xl p-6 shadow-md space-y-4">
+                <div class="flex items-center space-x-3">
+                    <div class="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center text-white">
+                        <i data-lucide="github" class="w-4 h-4"></i>
+                    </div>
+                    <div>
+                        <h4 class="font-bold text-sm text-white">GitHub Repository & Web Link</h4>
+                        <p class="text-xs text-slate-400">Zero build steps required. Host freely on GitHub Pages.</p>
+                    </div>
+                </div>
+                <div class="bg-black/30 rounded-xl p-3 text-xs font-mono text-emerald-400 overflow-x-auto">
+                    git remote add origin https://github.com/&lt;your-username&gt;/warehouse-erp.git<br>
+                    git push -u origin main
+                </div>
+                <p class="text-xs text-slate-400">
+                    Once pushed, enable <strong>GitHub Pages</strong> in your repository settings under <em>Settings -> Pages -> Deploy from a branch (main)</em> to get your live link instantly!
+                </p>
+            </div>
+        </section>
+    </main>
+
+    <!-- ========================================================================= -->
+    <!-- MODALS & LIGHTBOXES -->
+    <!-- ========================================================================= -->
+
+    <!-- Lightbox Modal for Fullscreen Fan Image Gallery Inspection -->
+    <div id="imageLightboxModal" class="fixed inset-0 z-50 bg-slate-950/85 backdrop-blur-sm hidden flex items-center justify-center p-2 sm:p-4">
+        <div class="bg-white rounded-2xl max-w-3xl w-full overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-200 flex flex-col max-h-[92vh]">
+            <div class="p-3.5 bg-slate-900 text-white flex items-center justify-between shrink-0">
+                <div class="flex items-center space-x-3">
+                    <div>
+                        <h3 id="lightboxFanTitle" class="font-bold text-sm">Carton Fan Photos</h3>
+                        <p id="lightboxCartonMeta" class="text-xs text-slate-400">Unique ID: 12345678C1</p>
+                    </div>
+                </div>
+                <div class="flex items-center space-x-3">
+                    <span id="lightboxPhotoCounter" class="bg-white/10 text-emerald-300 px-2.5 py-0.5 rounded-full text-xs font-mono font-bold">1 / 1</span>
+                    <button onclick="window.closeLightbox()" class="text-slate-400 hover:text-white p-1 rounded-lg">
+                        <i data-lucide="x" class="w-5 h-5"></i>
+                    </button>
+                </div>
+            </div>
+
+            <!-- Main Image Viewport with Previous & Next Arrows -->
+            <div class="relative bg-slate-950 flex-1 min-h-[300px] max-h-[55vh] flex items-center justify-center overflow-hidden">
+                <img id="lightboxImage" src="" alt="Carton Fan" class="max-h-[52vh] max-w-full object-contain shadow-md">
+
+                <!-- Previous Arrow -->
+                <button id="lightboxPrevBtn" onclick="window.navLightbox(-1)" class="absolute left-3 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-black/60 hover:bg-black/90 text-white flex items-center justify-center transition-all shadow-md active:scale-95" title="Previous Photo (Left Arrow)">
+                    <i data-lucide="chevron-left" class="w-6 h-6"></i>
+                </button>
+
+                <!-- Next Arrow -->
+                <button id="lightboxNextBtn" onclick="window.navLightbox(1)" class="absolute right-3 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-black/60 hover:bg-black/90 text-white flex items-center justify-center transition-all shadow-md active:scale-95" title="Next Photo (Right Arrow)">
+                    <i data-lucide="chevron-right" class="w-6 h-6"></i>
+                </button>
+            </div>
+
+            <!-- Thumbnails Filmstrip Carousel -->
+            <div id="lightboxThumbnailsStrip" class="p-2 bg-slate-900 border-t border-white/10 overflow-x-auto flex items-center gap-2 shrink-0 min-h-[64px]">
+                <!-- Clickable mini thumbnails injected here -->
+            </div>
+
+            <div class="p-3 bg-white border-t border-slate-200 flex items-center justify-between shrink-0">
+                <span id="lightboxPartyName" class="text-xs font-medium text-slate-600 truncate max-w-[260px]">Customer: Apex Electricals</span>
+                <div class="flex items-center gap-2">
+                    <a id="lightboxDownloadBtn" href="" download="fan_photo.jpg" class="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg flex items-center gap-1 transition-all">
+                        <i data-lucide="download" class="w-3.5 h-3.5"></i> Download Photo
+                    </a>
+                    <button onclick="window.closeLightbox()" class="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-lg transition-all">
+                        Close
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Sales Team Member Modal -->
+    <div id="addMemberModal" class="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs hidden flex items-center justify-center p-4">
+        <div class="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div class="flex items-center justify-between pb-3 border-b border-slate-100">
+                <h3 class="font-bold text-base text-slate-900 flex items-center gap-2">
+                    <i data-lucide="user-plus" class="w-5 h-5 text-emerald-600"></i>
+                    Add Sales Team Member
+                </h3>
+                <button onclick="window.closeAddMemberModal()" class="text-slate-400 hover:text-slate-600">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+
+            <form id="addMemberForm" onsubmit="window.handleAddMemberSubmit(event)" class="space-y-3">
+                <div>
+                    <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                        Full Name <span class="text-rose-500">*</span>
+                    </label>
+                    <input type="text" id="newMemberName" required placeholder="e.g. Vikramaditya Rao" class="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 focus:bg-white outline-none">
+                </div>
+
+                <div>
+                    <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                        Role / Designation
+                    </label>
+                    <select id="newMemberRole" class="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 focus:bg-white outline-none">
+                        <option value="Sales Representative">Sales Representative</option>
+                        <option value="Sales Manager">Sales Manager</option>
+                        <option value="Warehouse Supervisor">Warehouse Supervisor</option>
+                        <option value="Dispatch Officer">Dispatch Officer</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                        Employee ID
+                    </label>
+                    <input type="text" id="newMemberEmpId" placeholder="e.g. EMP-105" class="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 focus:bg-white outline-none">
+                </div>
+
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                            Phone
+                        </label>
+                        <input type="text" id="newMemberPhone" placeholder="+91 98765..." class="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 focus:bg-white outline-none">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                            Email
+                        </label>
+                        <input type="email" id="newMemberEmail" placeholder="user@company.com" class="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-sm focus:ring-2 focus:ring-emerald-500 focus:bg-white outline-none">
+                    </div>
+                </div>
+
+                <div class="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
+                    <button type="button" onclick="window.closeAddMemberModal()" class="px-4 py-2 border border-slate-200 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100">
+                        Cancel
+                    </button>
+                    <button type="submit" class="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-sm">
+                        Save Member
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Toast Notification Element -->
+    <div id="toastNotification" class="fixed bottom-5 right-5 z-50 bg-slate-900 text-white px-4 py-3 rounded-2xl shadow-xl flex items-center space-x-3 transition-all duration-300 translate-y-24 opacity-0 pointer-events-none">
+        <i id="toastIcon" data-lucide="check-circle-2" class="w-5 h-5 text-emerald-400"></i>
+        <span id="toastMessage" class="text-xs font-medium">Notification message</span>
+    </div>
+
+    <!-- Application Core Script (Runs on both local file:// and web/GitHub Pages) -->
+    <script src="js/app.js"></script>
+</body>
+</html>

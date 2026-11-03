@@ -1,0 +1,105 @@
+/* ==============================================================================
+   WAREHOUSE ERP - CUSTOM STYLES
+   Tailwind CSS complements these component-level enhancements
+   ============================================================================== */
+
+@layer utilities {
+    /* Custom scrollbars */
+    ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+    }
+    ::-webkit-scrollbar-track {
+        background: #f1f5f9;
+        border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb {
+        background: #cbd5e1;
+        border-radius: 4px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+        background: #94a3b8;
+    }
+}
+
+/* Tab Switching Transitions */
+.tab-pane {
+    display: none;
+    animation: fadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.tab-pane.active {
+    display: block;
+}
+
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(4px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* Image Thumbnail Hover & Glow */
+.fan-thumb-wrapper {
+    position: relative;
+    cursor: pointer;
+    overflow: hidden;
+    transition: all 0.2s ease;
+}
+
+.fan-thumb-wrapper:hover {
+    transform: scale(1.04);
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+}
+
+.fan-thumb-wrapper .hover-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: white;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+}
+
+.fan-thumb-wrapper:hover .hover-overlay {
+    opacity: 1;
+}
+
+/* Lightbox Modal */
+#imageLightboxModal {
+    backdrop-filter: blur(8px);
+}
+
+/* Dynamic Carton Row Transition */
+.carton-row-item {
+    transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* Print Stylesheet for Packing Slips & Carton Barcode Labels */
+@media print {
+    header, nav, #headerActions, .no-print, button, input[type="file"], .filter-bar {
+        display: none !important;
+    }
+
+    body {
+        background: white !important;
+        color: black !important;
+        font-size: 11pt;
+    }
+
+    .print-only {
+        display: block !important;
+    }
+
+    .table-container {
+        box-shadow: none !important;
+        border: 1px solid #e2e8f0 !important;
+    }
+}
