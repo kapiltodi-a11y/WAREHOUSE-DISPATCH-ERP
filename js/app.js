@@ -352,20 +352,43 @@
             return newMember;
         },
 
-        async deleteMember(id) {
-            if (!id) return false;
-            let memberName = '';
-            state.teamMembers = (state.teamMembers || []).filter(m => {
-                if (m.id === id) {
-                    memberName = m.name;
-                    return false;
+        async deleteMember(idOrIdx, optionalName) {
+            if (idOrIdx === undefined || idOrIdx === null) return false;
+            let memberName = optionalName || '';
+            let targetId = typeof idOrIdx === 'string' ? idOrIdx : '';
+
+            let foundIdx = -1;
+            if (typeof idOrIdx === 'number') {
+                foundIdx = idOrIdx;
+            } else {
+                foundIdx = (state.teamMembers || []).findIndex(m => 
+                    String(m.id) === String(idOrIdx) || 
+                    (m.name && m.name.toLowerCase() === String(idOrIdx).toLowerCase())
+                );
+            }
+
+            if (foundIdx >= 0 && foundIdx < (state.teamMembers || []).length) {
+                const removed = state.teamMembers.splice(foundIdx, 1)[0];
+                if (removed) {
+                    memberName = removed.name || memberName;
+                    targetId = removed.id || targetId;
                 }
-                return true;
-            });
+            } else {
+                state.teamMembers = (state.teamMembers || []).filter(m => {
+                    if (String(m.id) === String(idOrIdx) || (m.name && m.name === String(idOrIdx))) {
+                        memberName = m.name;
+                        targetId = m.id;
+                        return false;
+                    }
+                    return true;
+                });
+            }
+
             localStorage.setItem(TEAM_STORAGE_KEY, JSON.stringify(state.teamMembers));
 
-            // Background cloud sync
-            this.syncDeleteToCloud(id, memberName);
+            if (targetId || memberName) {
+                this.syncDeleteToCloud(targetId, memberName);
+            }
             return true;
         },
 
@@ -1694,14 +1717,14 @@
             return;
         }
 
-        tbody.innerHTML = state.teamMembers.map(m => `
+        tbody.innerHTML = state.teamMembers.map((m, idx) => `
             <tr class="hover:bg-slate-50 transition-colors">
                 <td class="py-3 px-4 font-bold text-slate-900">
                     <div class="flex items-center space-x-2">
                         <div class="w-6 h-6 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold text-[10px]">
-                            ${escapeHtml(m.name.substring(0, 2).toUpperCase())}
+                            ${escapeHtml((m.name || 'TM').substring(0, 2).toUpperCase())}
                         </div>
-                        <span>${escapeHtml(m.name)}</span>
+                        <span>${escapeHtml(m.name || 'Unnamed')}</span>
                     </div>
                 </td>
                 <td class="py-3 px-4">
@@ -1717,7 +1740,7 @@
                     <div class="text-[10px] text-slate-400">${escapeHtml(m.email || '')}</div>
                 </td>
                 <td class="py-3 px-4 text-center">
-                    <button onclick="window.handleDeleteMember('${m.id}')" class="p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer" title="Delete Team Member">
+                    <button type="button" onclick="window.handleDeleteMember(${idx})" class="p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer" title="Delete Team Member">
                         <i data-lucide="trash" class="w-4 h-4"></i>
                     </button>
                 </td>
@@ -1729,6 +1752,36 @@
         }
     };
 
+    window.saveInlineMember = async function () {
+        const nameInput = document.getElementById('inlineMemberName');
+        const roleInput = document.getElementById('inlineMemberRole');
+        const empIdInput = document.getElementById('inlineMemberEmpId');
+        const phoneInput = document.getElementById('inlineMemberPhone');
+
+        const name = (nameInput?.value || '').trim();
+        const role = (roleInput?.value || 'Sales Representative').trim();
+        const empId = (empIdInput?.value || '').trim() || `EMP-${Math.floor(100 + Math.random() * 900)}`;
+        const phone = (phoneInput?.value || '').trim();
+
+        if (!name) {
+            showToast('Please enter member name.', 'error');
+            nameInput?.focus();
+            return;
+        }
+
+        try {
+            await TeamService.addMember({ name, role, employee_id: empId, phone, email: '' });
+            showToast(`Added "${name}" to sales team!`, 'success');
+            if (nameInput) nameInput.value = '';
+            if (empIdInput) empIdInput.value = '';
+            if (phoneInput) phoneInput.value = '';
+            window.renderTeamDirectory();
+            populateUploaderDropdown();
+        } catch (err) {
+            showToast(`Error: ${err.message}`, 'error');
+        }
+    };
+
     window.openAddMemberModal = function () {
         const modal = document.getElementById('addMemberModal');
         if (modal) {
@@ -1736,7 +1789,11 @@
             modal.classList.add('flex');
             modal.style.display = 'flex';
             setTimeout(() => {
-                document.getElementById('newMemberName')?.focus();
+                const input = document.getElementById('newMemberName');
+                if (input) {
+                    input.value = '';
+                    input.focus();
+                }
             }, 60);
         }
     };
@@ -1786,13 +1843,17 @@
 
     window.handleAddMemberSubmit = window.saveNewTeamMember;
 
-    window.handleDeleteMember = async function (id) {
-        if (!id) return;
-        const member = (state.teamMembers || []).find(m => m.id === id);
-        const name = member ? member.name : 'Team member';
+    window.handleDeleteMember = async function (idOrIdx) {
+        let name = 'Team member';
+        if (typeof idOrIdx === 'number' && state.teamMembers && state.teamMembers[idOrIdx]) {
+            name = state.teamMembers[idOrIdx].name;
+        } else {
+            const found = (state.teamMembers || []).find(m => String(m.id) === String(idOrIdx) || m.name === idOrIdx);
+            if (found) name = found.name;
+        }
 
-        await TeamService.deleteMember(id);
-        showToast(`Removed ${name} from sales team.`, 'success');
+        await TeamService.deleteMember(idOrIdx, name);
+        showToast(`Removed "${name}" from sales team.`, 'success');
         window.renderTeamDirectory();
         populateUploaderDropdown();
     };
