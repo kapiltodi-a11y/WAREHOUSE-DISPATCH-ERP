@@ -947,6 +947,65 @@
             return c.status;
         },
 
+        async updateCarton(cartonId, fields) {
+            if (!cartonId) return null;
+
+            // 1. Update in local state
+            state.allCartons = state.allCartons || [];
+            const idx = state.allCartons.findIndex(c => String(c.id) === String(cartonId) || c.carton_unique_id === cartonId);
+            let updatedRecord = null;
+            if (idx !== -1) {
+                state.allCartons[idx] = {
+                    ...state.allCartons[idx],
+                    ...fields
+                };
+                updatedRecord = state.allCartons[idx];
+            }
+
+            try {
+                localStorage.setItem(CARTON_STORAGE_KEY, JSON.stringify(state.allCartons));
+            } catch (e) {
+                console.warn('[DispatchService] Local storage update error:', e);
+            }
+
+            // 2. Background sync to Supabase
+            const client = SupabaseManager.getClient();
+            if (client) {
+                try {
+                    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cartonId);
+                    if (isUuid) {
+                        await client.from('warehouse_cartons').update({
+                            customer_name: fields.customer_name,
+                            awb_number: fields.awb_number,
+                            carton_unique_id: fields.carton_unique_id,
+                            fan_name: fields.fan_name
+                        }).eq('id', cartonId);
+                    } else if (fields.carton_unique_id) {
+                        await client.from('warehouse_cartons').update({
+                            customer_name: fields.customer_name,
+                            awb_number: fields.awb_number,
+                            fan_name: fields.fan_name
+                        }).eq('carton_unique_id', fields.carton_unique_id);
+                    }
+
+                    const dispatchId = fields.dispatch_id || (updatedRecord ? updatedRecord.dispatch_id : null);
+                    if (dispatchId && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(dispatchId)) {
+                        await client.from('warehouse_dispatches').update({
+                            customer_name: fields.customer_name,
+                            awb_number: fields.awb_number,
+                            dispatch_date: fields.dispatch_date,
+                            total_cartons: fields.total_cartons,
+                            uploaded_by: fields.uploaded_by
+                        }).eq('id', dispatchId);
+                    }
+                } catch (e) {
+                    console.warn('[DispatchService] Supabase update note:', e);
+                }
+            }
+
+            return updatedRecord;
+        },
+
         exportToExcel(cartonList = []) {
             if (!window.XLSX) {
                 alert('SheetJS Excel library not available.');
@@ -1574,8 +1633,16 @@
                     <!-- Actions -->
                     <td class="py-3.5 px-4 text-center whitespace-nowrap">
                         <div class="flex items-center justify-center gap-1.5">
-                            <button onclick="window.toggleCartonDispatch('${c.id}')" 
-                                    class="px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all ${
+                            <button type="button" 
+                                    onclick="window.openEditCartonModal('${c.id}')" 
+                                    class="px-2.5 py-1 text-xs font-bold text-blue-700 hover:text-blue-900 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg transition-all inline-flex items-center gap-1 cursor-pointer active:scale-95 shadow-2xs" 
+                                    title="Edit Carton Entry">
+                                <i data-lucide="edit-3" class="w-3.5 h-3.5"></i>
+                                <span>Edit</span>
+                            </button>
+                            <button type="button" 
+                                    onclick="window.toggleCartonDispatch('${c.id}')" 
+                                    class="px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-all cursor-pointer ${
                                         isDispatched 
                                             ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200' 
                                             : 'bg-amber-100 text-amber-800 hover:bg-amber-200'
@@ -1583,8 +1650,9 @@
                                 <span class="w-1.5 h-1.5 rounded-full ${isDispatched ? 'bg-emerald-600' : 'bg-amber-600'}"></span>
                                 <span>${c.status || 'Ready'}</span>
                             </button>
-                            <button onclick="window.deleteCartonRecord('${c.id}')" 
-                                    class="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors" title="Delete Carton">
+                            <button type="button" 
+                                    onclick="window.deleteCartonRecord('${c.id}')" 
+                                    class="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-rose-50 transition-colors cursor-pointer" title="Delete Carton">
                                 <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
                             </button>
                         </div>
@@ -1626,6 +1694,157 @@
         state.allCartons = state.allCartons.filter(c => c.id !== cartonId);
         window.renderLedgerTable();
         showToast('Carton deleted.', 'success');
+    };
+
+    // --------------------------------------------------------------------------
+    // 9.5. EDIT CARTON ENTRY MODAL CONTROLS
+    // --------------------------------------------------------------------------
+    window.openEditCartonModal = function (cartonId) {
+        const carton = state.allCartons.find(c => String(c.id) === String(cartonId) || c.carton_unique_id === cartonId);
+        if (!carton) {
+            showToast('Carton record not found.', 'error');
+            return;
+        }
+
+        const idInput = document.getElementById('editCartonRecordId');
+        if (idInput) idInput.value = carton.id;
+
+        const subtitle = document.getElementById('editCartonModalSubtitle');
+        if (subtitle) subtitle.textContent = `Carton ID: ${carton.carton_unique_id || 'N/A'}`;
+
+        const custInput = document.getElementById('editCustomerName');
+        if (custInput) custInput.value = carton.customer_name || '';
+
+        const awbInput = document.getElementById('editAwbNumber');
+        if (awbInput) awbInput.value = carton.awb_number || '';
+
+        const uidInput = document.getElementById('editCartonUniqueId');
+        if (uidInput) uidInput.value = carton.carton_unique_id || '';
+
+        const fanInput = document.getElementById('editFanName');
+        if (fanInput) fanInput.value = carton.fan_name || '';
+
+        const dateInput = document.getElementById('editDispatchDate');
+        if (dateInput) dateInput.value = carton.dispatch_date || new Date().toISOString().split('T')[0];
+
+        const totalInput = document.getElementById('editTotalCartons');
+        if (totalInput) totalInput.value = carton.total_cartons || 1;
+
+        const uploaderSelect = document.getElementById('editUploadedBy');
+        if (uploaderSelect) {
+            uploaderSelect.innerHTML = state.teamMembers.map(m => 
+                `<option value="${escapeHtml(m.name)}" ${m.name === carton.uploaded_by ? 'selected' : ''}>${escapeHtml(m.name)} (${escapeHtml(m.role || 'Sales')})</option>`
+            ).join('');
+            if (!carton.uploaded_by && state.teamMembers.length > 0) {
+                uploaderSelect.value = state.teamMembers[0].name;
+            } else {
+                uploaderSelect.value = carton.uploaded_by || '';
+            }
+        }
+
+        const statusSelect = document.getElementById('editStatus');
+        if (statusSelect) statusSelect.value = carton.status || 'Ready for Dispatch';
+
+        const photosContainer = document.getElementById('editCartonPhotosPreview');
+        if (photosContainer) {
+            const photosList = carton.photos && carton.photos.length > 0 ? carton.photos : (carton.image_url ? [carton.image_url] : []);
+            if (photosList.length === 0) {
+                photosContainer.innerHTML = `<span class="text-slate-400 text-[11px] italic">No photos attached to this carton.</span>`;
+            } else {
+                photosContainer.innerHTML = photosList.map((url, pIdx) => `
+                    <div class="relative w-11 h-11 rounded-lg border border-slate-300 overflow-hidden shrink-0 group cursor-pointer shadow-2xs hover:scale-105 transition-all"
+                         onclick="window.openCartonGalleryById('${carton.id}')" title="Click to view full photo">
+                        <img src="${url}" class="w-full h-full object-cover">
+                        <span class="absolute bottom-0 right-0 px-1 text-[9px] bg-black/70 text-white font-bold rounded-tl">#${pIdx + 1}</span>
+                    </div>
+                `).join('') + `<span class="text-slate-500 text-[10px] ml-1">(${photosList.length} photos)</span>`;
+            }
+        }
+
+        const modal = document.getElementById('editCartonModal');
+        if (modal) {
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+            modal.style.display = 'flex';
+        }
+
+        if (window.lucide && typeof window.lucide.createIcons === 'function') {
+            window.lucide.createIcons();
+        }
+    };
+
+    window.closeEditCartonModal = function () {
+        const modal = document.getElementById('editCartonModal');
+        if (modal) {
+            modal.classList.remove('flex');
+            modal.classList.add('hidden');
+            modal.style.display = 'none';
+        }
+    };
+
+    window.saveEditedCarton = async function () {
+        const idInput = document.getElementById('editCartonRecordId');
+        const recordId = idInput?.value;
+        if (!recordId) {
+            showToast('No carton selected for editing.', 'error');
+            return;
+        }
+
+        const customerName = (document.getElementById('editCustomerName')?.value || '').trim();
+        const awbNumber = (document.getElementById('editAwbNumber')?.value || '').trim().toUpperCase();
+        const cartonUniqueId = (document.getElementById('editCartonUniqueId')?.value || '').trim().toUpperCase();
+        const fanName = (document.getElementById('editFanName')?.value || '').trim();
+        const dispatchDate = document.getElementById('editDispatchDate')?.value || new Date().toISOString().split('T')[0];
+        const totalCartons = parseInt(document.getElementById('editTotalCartons')?.value || '1', 10) || 1;
+        const uploadedBy = (document.getElementById('editUploadedBy')?.value || 'Warehouse Staff').trim();
+        const status = document.getElementById('editStatus')?.value || 'Ready for Dispatch';
+
+        if (!customerName) {
+            showToast('Customer / Party name is required.', 'error');
+            document.getElementById('editCustomerName')?.focus();
+            return;
+        }
+        if (!awbNumber) {
+            showToast('AWB Number is required.', 'error');
+            document.getElementById('editAwbNumber')?.focus();
+            return;
+        }
+        if (!cartonUniqueId) {
+            showToast('Carton Unique ID is required.', 'error');
+            document.getElementById('editCartonUniqueId')?.focus();
+            return;
+        }
+
+        // Save party name to autocomplete list
+        PartyService.saveParty(customerName);
+
+        // Update via DispatchService
+        await DispatchService.updateCarton(recordId, {
+            customer_name: customerName,
+            awb_number: awbNumber,
+            carton_unique_id: cartonUniqueId,
+            fan_name: fanName,
+            dispatch_date: dispatchDate,
+            total_cartons: totalCartons,
+            uploaded_by: uploadedBy,
+            status: status
+        });
+
+        // Close modal and refresh UI
+        window.closeEditCartonModal();
+        window.renderLedgerTable();
+        PartyService.renderPartyControls();
+        populateUploaderDropdown();
+        showToast(`Saved changes for carton ${cartonUniqueId}!`, 'success');
+    };
+
+    window.deleteCartonFromEditModal = async function () {
+        const idInput = document.getElementById('editCartonRecordId');
+        const recordId = idInput?.value;
+        if (!recordId) return;
+
+        window.closeEditCartonModal();
+        await window.deleteCartonRecord(recordId);
     };
 
     // --------------------------------------------------------------------------
@@ -1953,14 +2172,21 @@
 
     function populateUploaderDropdown() {
         const select = document.getElementById('selectUploadedBy');
-        if (!select) return;
+        if (select) {
+            select.innerHTML = '<option value="">-- Choose Team Member --</option>' +
+                state.teamMembers.map(m => `<option value="${escapeHtml(m.name)}">${escapeHtml(m.name)} (${escapeHtml(m.role || 'Sales')})</option>`).join('');
 
-        select.innerHTML = '<option value="">-- Choose Team Member --</option>' +
-            state.teamMembers.map(m => `<option value="${escapeHtml(m.name)}">${escapeHtml(m.name)} (${escapeHtml(m.role || 'Sales')})</option>`).join('');
+            if (state.teamMembers.length > 0 && !select.value) {
+                select.value = state.teamMembers[0].name;
+                updateBatchIdPreview();
+            }
+        }
 
-        if (state.teamMembers.length > 0 && !select.value) {
-            select.value = state.teamMembers[0].name;
-            updateBatchIdPreview();
+        const filterSelect = document.getElementById('filterUploaderSelect');
+        if (filterSelect) {
+            const currentVal = filterSelect.value;
+            filterSelect.innerHTML = '<option value="">All Uploaders</option>' +
+                state.teamMembers.map(m => `<option value="${escapeHtml(m.name)}" ${m.name === currentVal ? 'selected' : ''}>${escapeHtml(m.name)}</option>`).join('');
         }
     }
 
@@ -2437,10 +2663,18 @@ CREATE POLICY "Public access to warehouse photos" ON storage.objects FOR ALL TO 
             }
         });
 
+        // Close Edit Carton modal when clicking outside content box
+        document.getElementById('editCartonModal')?.addEventListener('click', (e) => {
+            if (e.target.id === 'editCartonModal') {
+                window.closeEditCartonModal();
+            }
+        });
+
         // Close modals on Escape key
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') {
                 window.closeAddMemberModal();
+                window.closeEditCartonModal();
                 window.closeLightbox();
                 window.closePartyDropdown();
             }

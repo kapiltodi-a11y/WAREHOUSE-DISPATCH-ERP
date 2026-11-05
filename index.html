@@ -401,7 +401,7 @@
                                 Sales & Warehouse Team Directory
                             </h3>
                             <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
-                                v10.0 • Live Cloud Sync (Connected)
+                                v11.0 • Carton Editor & Cloud Sync
                             </span>
                         </div>
                         <p class="text-xs text-slate-500 mt-0.5">
@@ -674,6 +674,125 @@
         </div>
     </div>
 
+    <!-- Edit Carton Ledger Entry Modal -->
+    <div id="editCartonModal" class="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm hidden items-center justify-center p-3 sm:p-4">
+        <div class="bg-white rounded-2xl max-w-lg w-full p-5 sm:p-6 shadow-2xl space-y-4 max-h-[92vh] overflow-y-auto">
+            <div class="flex items-center justify-between pb-3 border-b border-slate-100">
+                <div class="flex items-center gap-2.5">
+                    <div class="w-9 h-9 rounded-xl bg-blue-50 text-blue-700 border border-blue-200 flex items-center justify-center shrink-0">
+                        <i data-lucide="edit-3" class="w-4 h-4"></i>
+                    </div>
+                    <div>
+                        <h3 class="font-bold text-base text-slate-900 leading-tight">Edit Carton Entry</h3>
+                        <p id="editCartonModalSubtitle" class="text-[11px] text-slate-500 font-mono mt-0.5">Carton ID: --</p>
+                    </div>
+                </div>
+                <button type="button" onclick="window.closeEditCartonModal()" class="text-slate-400 hover:text-slate-600 cursor-pointer p-1.5 rounded-lg hover:bg-slate-100 transition-colors">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+
+            <!-- Hidden input for record ID -->
+            <input type="hidden" id="editCartonRecordId">
+
+            <div class="space-y-3.5 text-xs">
+                <!-- Row 1: Name of Party & AWB Number -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                        <label class="block font-bold text-slate-700 uppercase tracking-wider mb-1">
+                            Name of Party <span class="text-rose-500">*</span>
+                        </label>
+                        <input type="text" id="editCustomerName" placeholder="Customer Name" class="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-semibold focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none">
+                    </div>
+                    <div>
+                        <label class="block font-bold text-slate-700 uppercase tracking-wider mb-1">
+                            AWB Number <span class="text-rose-500">*</span>
+                        </label>
+                        <input type="text" id="editAwbNumber" placeholder="AWB Number" class="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono font-bold focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none">
+                    </div>
+                </div>
+
+                <!-- Row 2: Carton Unique ID & Fan Name -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                        <label class="block font-bold text-slate-700 uppercase tracking-wider mb-1">
+                            Carton Unique ID <span class="text-rose-500">*</span>
+                        </label>
+                        <input type="text" id="editCartonUniqueId" placeholder="e.g. 12345678C1" class="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-mono font-bold text-emerald-800 focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none">
+                    </div>
+                    <div>
+                        <label class="block font-bold text-slate-700 uppercase tracking-wider mb-1">
+                            Fan Name / Description
+                        </label>
+                        <input type="text" id="editFanName" placeholder="e.g. AeroStorm 1200mm Pearl White" class="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-medium focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none">
+                    </div>
+                </div>
+
+                <!-- Row 3: Dispatch Date & Total Cartons -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                        <label class="block font-bold text-slate-700 uppercase tracking-wider mb-1">
+                            Dispatch Date
+                        </label>
+                        <input type="date" id="editDispatchDate" class="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-medium focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none">
+                    </div>
+                    <div>
+                        <label class="block font-bold text-slate-700 uppercase tracking-wider mb-1">
+                            Total Cartons in Shipment
+                        </label>
+                        <input type="number" id="editTotalCartons" min="1" max="100" class="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-medium focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none">
+                    </div>
+                </div>
+
+                <!-- Row 4: Uploaded By & Status -->
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                        <label class="block font-bold text-slate-700 uppercase tracking-wider mb-1">
+                            Uploaded By
+                        </label>
+                        <select id="editUploadedBy" class="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-medium focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none">
+                            <!-- Populated dynamically with team members -->
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block font-bold text-slate-700 uppercase tracking-wider mb-1">
+                            Dispatch Status
+                        </label>
+                        <select id="editStatus" class="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs font-bold focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none">
+                            <option value="Ready for Dispatch">Ready for Dispatch</option>
+                            <option value="Dispatched">Dispatched</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Photos Mini Filmstrip in Modal -->
+                <div>
+                    <label class="block font-bold text-slate-700 uppercase tracking-wider mb-1">
+                        Attached Photos
+                    </label>
+                    <div id="editCartonPhotosPreview" class="flex items-center gap-2 overflow-x-auto p-2.5 bg-slate-50 rounded-xl border border-slate-200 min-h-[58px]">
+                        <!-- Thumbnails injected dynamically -->
+                    </div>
+                </div>
+
+                <!-- Action buttons -->
+                <div class="flex items-center justify-between pt-3 border-t border-slate-100 gap-2">
+                    <button type="button" onclick="window.deleteCartonFromEditModal()" class="px-3.5 py-2 text-rose-600 hover:text-rose-800 hover:bg-rose-50 border border-rose-200 rounded-xl text-xs font-semibold cursor-pointer flex items-center gap-1.5 transition-all">
+                        <i data-lucide="trash-2" class="w-3.5 h-3.5"></i> Delete Entry
+                    </button>
+                    <div class="flex items-center gap-2">
+                        <button type="button" onclick="window.closeEditCartonModal()" class="px-4 py-2 border border-slate-200 rounded-xl text-xs font-semibold text-slate-600 hover:bg-slate-100 cursor-pointer transition-all">
+                            Cancel
+                        </button>
+                        <button type="button" onclick="window.saveEditedCarton()" class="px-5 py-2 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white rounded-xl text-xs font-bold shadow-sm cursor-pointer flex items-center gap-1.5 transition-all">
+                            <i data-lucide="check" class="w-3.5 h-3.5"></i> Save Changes
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Toast Notification Element -->
     <div id="toastNotification" class="fixed bottom-5 right-5 z-50 bg-slate-900 text-white px-4 py-3 rounded-2xl shadow-xl flex items-center space-x-3 transition-all duration-300 translate-y-24 opacity-0 pointer-events-none">
         <i id="toastIcon" data-lucide="check-circle-2" class="w-5 h-5 text-emerald-400"></i>
@@ -681,10 +800,10 @@
     </div>
 
     <!-- Application Core Script (Loads from root or js/ directory with automatic fallback & cache buster) -->
-    <script src="app.js?v=10.0"></script>
+    <script src="app.js?v=11.0"></script>
     <script>
         if (typeof window.saveNewTeamMember !== 'function') {
-            document.write('<script src="js/app.js?v=10.0"><\/script>');
+            document.write('<script src="js/app.js?v=11.0"><\/script>');
         }
     </script>
 </body>
