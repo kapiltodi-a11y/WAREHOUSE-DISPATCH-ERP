@@ -764,7 +764,8 @@
                                 dispatch_date,
                                 total_cartons,
                                 uploaded_by,
-                                shipment_unique_id
+                                shipment_unique_id,
+                                notes
                             )
                         `)
                         .order('created_at', { ascending: false });
@@ -779,6 +780,20 @@
                                 photosList = [item.image_url];
                             }
 
+                            let awbPhotoUrl = null;
+                            if (d.notes) {
+                                try {
+                                    const parsedNotes = JSON.parse(d.notes);
+                                    if (parsedNotes && parsedNotes.awb_photo_url) {
+                                        awbPhotoUrl = parsedNotes.awb_photo_url;
+                                    }
+                                } catch (e) {
+                                    if (typeof d.notes === 'string' && (d.notes.startsWith('http') || d.notes.startsWith('data:image'))) {
+                                        awbPhotoUrl = d.notes;
+                                    }
+                                }
+                            }
+
                             return {
                                 id: item.id,
                                 dispatch_id: item.dispatch_id,
@@ -789,6 +804,7 @@
                                 fan_name: item.fan_name,
                                 image_url: item.image_url,
                                 photos: photosList,
+                                awb_photo_url: awbPhotoUrl || item.awb_photo_url || null,
                                 dispatch_date: d.dispatch_date || new Date(item.created_at).toISOString().split('T')[0],
                                 total_cartons: d.total_cartons || 1,
                                 uploaded_by: d.uploaded_by || 'Warehouse Staff',
@@ -826,7 +842,8 @@
             awb_number,
             customer_name,
             uploaded_by,
-            cartons = []
+            cartons = [],
+            awb_photo = null
         }) {
             const cleanAWB = (awb_number || 'AWB').trim().toUpperCase();
             const cleanCustomer = (customer_name || 'Customer').trim();
@@ -839,6 +856,16 @@
             const safeDate = dateStr.replace(/-/g, '');
             const shipmentUniqueId = `WH-${safeDate}-${safeCust}-${safeUploader}-${cleanAWB}`;
             const dispatchId = 'disp-' + Date.now();
+
+            // Process & Upload AWB Physical Copy Photo
+            let awbPhotoUrl = awb_photo || null;
+            if (awbPhotoUrl && awbPhotoUrl.startsWith('data:image')) {
+                try {
+                    awbPhotoUrl = await SupabaseManager.uploadImage(awbPhotoUrl, `awb_${cleanAWB}`);
+                } catch (e) {
+                    console.warn('[DispatchService] AWB photo upload fallback:', e);
+                }
+            }
 
             const newCartonRecords = [];
 
@@ -875,6 +902,7 @@
                     fan_name: fanName,
                     image_url: primaryImage,
                     photos: processedPhotos,
+                    awb_photo_url: awbPhotoUrl,
                     shipment_unique_id: shipmentUniqueId,
                     status: 'Ready for Dispatch',
                     created_at: new Date().toISOString()
@@ -885,6 +913,7 @@
             const client = SupabaseManager.getClient();
             if (client) {
                 try {
+                    const notesPayload = JSON.stringify({ awb_photo_url: awbPhotoUrl });
                     const { data: dispData } = await client
                         .from('warehouse_dispatches')
                         .insert([{
@@ -893,7 +922,8 @@
                             total_cartons: totalCartons,
                             customer_name: cleanCustomer,
                             uploaded_by: cleanUploader,
-                            shipment_unique_id: shipmentUniqueId
+                            shipment_unique_id: shipmentUniqueId,
+                            notes: notesPayload
                         }])
                         .select()
                         .single();
@@ -1029,6 +1059,8 @@
                     'Primary Image URL': item.image_url && !item.image_url.startsWith('data:') ? item.image_url : (item.image_url ? 'Embedded In-App' : 'None'),
                     'Uploaded By': item.uploaded_by || 'Staff',
                     'AWB Number': item.awb_number,
+                    'AWB Slip Attached': item.awb_photo_url ? 'Yes' : 'No',
+                    'AWB Slip URL': item.awb_photo_url && !item.awb_photo_url.startsWith('data:') ? item.awb_photo_url : (item.awb_photo_url ? 'Attached (In-App)' : 'None'),
                     'Shipment Batch ID': item.shipment_unique_id || '',
                     'Status': item.status || 'Ready for Dispatch',
                     'Timestamp': item.created_at
@@ -1057,7 +1089,8 @@
         activeTab: 'new-dispatch',
         teamMembers: getInitialTeamMembers(),
         allCartons: [],
-        currentCartonRows: []
+        currentCartonRows: [],
+        currentAwbPhoto: null
     };
 
     // Global Tab Switcher
@@ -1384,7 +1417,240 @@
     };
 
     // --------------------------------------------------------------------------
-    // 8. DISPATCH SUBMISSION (NON-BLOCKING)
+    // 7.5. AWB DOCKET PHOTO & AUTOMATIC BARCODE SCANNER
+    // --------------------------------------------------------------------------
+
+    /**
+     * Client-side Barcode Scanner:
+     * Reads photo of physical shipping docket slip (AWB copy) and extracts barcode
+     * (Code 128, Code 39, EAN-13, ITF, etc.) printed above the AWB number.
+     * Supports:
+     * 1. Native window.BarcodeDetector (fastest on modern Android Chrome / Chromium)
+     * 2. ZXing BrowserMultiFormatReader (universal client-side fallback)
+     * 3. Canvas image enhancement (grayscale & contrast stretching for faint / tilted barcodes)
+     */
+    async function scanBarcodeFromImage(imageElement) {
+        if (!imageElement) return null;
+
+        // Pass 1: Native BarcodeDetector (Modern Android Chrome / Chromium)
+        if ('BarcodeDetector' in window) {
+            try {
+                const supported = await window.BarcodeDetector.getSupportedFormats().catch(() => []);
+                const targetFormats = ['code_128', 'code_39', 'ean_13', 'itf', 'codabar', 'qr_code', 'upc_a']
+                    .filter(fmt => supported.length === 0 || supported.includes(fmt));
+                
+                const detector = new window.BarcodeDetector({
+                    formats: targetFormats.length ? targetFormats : ['code_128', 'code_39']
+                });
+                const barcodes = await detector.detect(imageElement);
+                if (barcodes && barcodes.length > 0) {
+                    for (const b of barcodes) {
+                        if (b.rawValue && b.rawValue.trim()) {
+                            console.log('[BarcodeDetector] Detected barcode:', b.format, b.rawValue);
+                            return b.rawValue.trim();
+                        }
+                    }
+                }
+            } catch (e) {
+                console.warn('[BarcodeDetector] Native scan attempt:', e);
+            }
+        }
+
+        // Pass 2: ZXing MultiFormat Reader on original image
+        if (window.ZXing && window.ZXing.BrowserMultiFormatReader) {
+            try {
+                const reader = new window.ZXing.BrowserMultiFormatReader();
+                const result = await reader.decodeFromImageElement(imageElement);
+                if (result && result.getText && result.getText().trim()) {
+                    console.log('[ZXing] Detected barcode:', result.getText());
+                    return result.getText().trim();
+                }
+            } catch (zxErr) {
+                // ZXing throws NotFoundException when no barcode detected on first pass
+            }
+        }
+
+        // Pass 3: Canvas Preprocessing (Downscale if huge, Grayscale & Contrast Stretched)
+        try {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d', { willReadFrequently: true });
+            if (!ctx) return null;
+
+            let width = imageElement.naturalWidth || imageElement.width || 1200;
+            let height = imageElement.naturalHeight || imageElement.height || 800;
+            const maxDim = 1600;
+            if (width > maxDim || height > maxDim) {
+                const scale = Math.min(maxDim / width, maxDim / height);
+                width = Math.round(width * scale);
+                height = Math.round(height * scale);
+            }
+            canvas.width = width;
+            canvas.height = height;
+
+            ctx.drawImage(imageElement, 0, 0, width, height);
+
+            // Native BarcodeDetector on canvas
+            if ('BarcodeDetector' in window) {
+                try {
+                    const detector = new window.BarcodeDetector();
+                    const barcodes = await detector.detect(canvas);
+                    if (barcodes && barcodes.length > 0 && barcodes[0].rawValue) {
+                        return barcodes[0].rawValue.trim();
+                    }
+                } catch (e) {}
+            }
+
+            // Contrast & Grayscale processing
+            const imgData = ctx.getImageData(0, 0, width, height);
+            const d = imgData.data;
+            for (let i = 0; i < d.length; i += 4) {
+                const gray = (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114);
+                // Contrast stretch around midpoint 128
+                const contrast = gray > 128 ? Math.min(255, gray * 1.35) : Math.max(0, gray * 0.65);
+                d[i] = contrast;
+                d[i + 1] = contrast;
+                d[i + 2] = contrast;
+            }
+            ctx.putImageData(imgData, 0, 0);
+
+            // Native BarcodeDetector on high-contrast canvas
+            if ('BarcodeDetector' in window) {
+                try {
+                    const detector = new window.BarcodeDetector();
+                    const barcodes = await detector.detect(canvas);
+                    if (barcodes && barcodes.length > 0 && barcodes[0].rawValue) {
+                        return barcodes[0].rawValue.trim();
+                    }
+                } catch (e) {}
+            }
+
+            // ZXing on high-contrast canvas
+            if (window.ZXing && window.ZXing.BrowserMultiFormatReader) {
+                try {
+                    const reader = new window.ZXing.BrowserMultiFormatReader();
+                    const result = await reader.decodeFromCanvas(canvas);
+                    if (result && result.getText && result.getText().trim()) {
+                        return result.getText().trim();
+                    }
+                } catch (zxErr2) {}
+            }
+        } catch (canvasErr) {
+            console.warn('[BarcodeScanner] Canvas enhancement error:', canvasErr);
+        }
+
+        return null;
+    }
+
+    window.handleAwbPhotoSelected = async function (event) {
+        const file = event.target.files && event.target.files[0];
+        if (!file) return;
+
+        const emptyState = document.getElementById('awbPhotoEmptyState');
+        const scanningState = document.getElementById('awbPhotoScanningState');
+        const attachedState = document.getElementById('awbPhotoAttachedState');
+        const thumbImg = document.getElementById('awbPhotoThumbImg');
+        const badge = document.getElementById('awbScanResultBadge');
+        const successIcon = document.getElementById('awbScanSuccessIcon');
+        const awbInput = document.getElementById('inputAwbNumber');
+
+        // Show Scanning state
+        if (emptyState) emptyState.classList.add('hidden');
+        if (attachedState) attachedState.classList.add('hidden');
+        if (scanningState) scanningState.classList.remove('hidden');
+
+        const reader = new FileReader();
+        reader.onload = async function (e) {
+            const dataUrl = e.target.result;
+            state.currentAwbPhoto = dataUrl;
+
+            if (thumbImg) thumbImg.src = dataUrl;
+
+            // Load into an HTML Image element to perform barcode scan
+            const tempImg = new Image();
+            tempImg.crossOrigin = 'anonymous';
+
+            tempImg.onload = async function () {
+                let scannedAwb = null;
+                try {
+                    scannedAwb = await scanBarcodeFromImage(tempImg);
+                } catch (scanErr) {
+                    console.warn('[handleAwbPhotoSelected] Scan error:', scanErr);
+                }
+
+                // Hide scanning, show attached state
+                if (scanningState) scanningState.classList.add('hidden');
+                if (attachedState) attachedState.classList.remove('hidden');
+
+                if (scannedAwb) {
+                    const cleanAwb = scannedAwb.trim().replace(/^[\r\n\t]+|[\r\n\t]+$/g, '');
+                    if (awbInput) {
+                        awbInput.value = cleanAwb;
+                        // Fire input event so carton rows & batch preview update immediately
+                        awbInput.dispatchEvent(new Event('input', { bubbles: true }));
+                    }
+
+                    if (badge) {
+                        badge.innerHTML = `<span class="text-emerald-700 font-bold flex items-center gap-1"><i data-lucide="check" class="w-3 h-3"></i> Scanned: ${escapeHtml(cleanAwb)}</span>`;
+                    }
+                    if (successIcon) successIcon.classList.remove('hidden');
+
+                    showToast(`Scanned AWB Barcode: ${cleanAwb}`, 'success');
+                } else {
+                    if (badge) {
+                        badge.innerHTML = `<span class="text-amber-700 font-medium">Photo attached. Check / enter AWB # manually</span>`;
+                    }
+                    if (successIcon) successIcon.classList.add('hidden');
+
+                    showToast('AWB photo attached! Please verify or enter AWB # manually.', 'info');
+                    if (awbInput && !awbInput.value.trim()) {
+                        awbInput.focus();
+                    }
+                }
+
+                if (window.lucide && typeof window.lucide.createIcons === 'function') {
+                    window.lucide.createIcons();
+                }
+            };
+
+            tempImg.src = dataUrl;
+        };
+
+        reader.readAsDataURL(file);
+        event.target.value = '';
+    };
+
+    window.removeAwbPhoto = function () {
+        state.currentAwbPhoto = null;
+
+        const fileInput = document.getElementById('inputAwbPhotoFile');
+        if (fileInput) fileInput.value = '';
+
+        const emptyState = document.getElementById('awbPhotoEmptyState');
+        const scanningState = document.getElementById('awbPhotoScanningState');
+        const attachedState = document.getElementById('awbPhotoAttachedState');
+        const thumbImg = document.getElementById('awbPhotoThumbImg');
+        const successIcon = document.getElementById('awbScanSuccessIcon');
+
+        if (emptyState) emptyState.classList.remove('hidden');
+        if (scanningState) scanningState.classList.add('hidden');
+        if (attachedState) attachedState.classList.add('hidden');
+        if (thumbImg) thumbImg.src = '';
+        if (successIcon) successIcon.classList.add('hidden');
+
+        if (window.lucide && typeof window.lucide.createIcons === 'function') {
+            window.lucide.createIcons();
+        }
+    };
+
+    window.previewAwbPhoto = function () {
+        if (!state.currentAwbPhoto) return;
+        const awb = document.getElementById('inputAwbNumber')?.value.trim() || 'AWB Slip';
+        const party = document.getElementById('inputPartyName')?.value.trim() || '';
+        window.openLightboxGallery([state.currentAwbPhoto], 0, 'Physical AWB Docket Slip', awb, party);
+    };
+
+    // --------------------------------------------------------------------------
+    // 8. DISPATCH SUBMISSION (NON-BLOCKING WITH MANDATORY AWB PHOTO)
     // --------------------------------------------------------------------------
     window.handleDispatchSubmit = async function () {
         const date = document.getElementById('inputDispatchDate')?.value || new Date().toISOString().split('T')[0];
@@ -1392,11 +1658,28 @@
         const party = document.getElementById('inputPartyName')?.value.trim();
         const uploader = document.getElementById('selectUploadedBy')?.value.trim();
 
+        // 1. Mandatory AWB physical copy photo check
+        if (!state.currentAwbPhoto) {
+            showToast('Mandatory: Please attach or snap a photo of the physical AWB copy.', 'error');
+            const dropzone = document.getElementById('awbPhotoDropzone');
+            if (dropzone) {
+                dropzone.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                dropzone.classList.add('ring-4', 'ring-rose-500', 'border-rose-500');
+                setTimeout(() => {
+                    dropzone.classList.remove('ring-4', 'ring-rose-500', 'border-rose-500');
+                }, 2500);
+            }
+            return;
+        }
+
+        // 2. AWB number check
         if (!awb) {
-            showToast('Please enter an AWB / Docket number.', 'error');
+            showToast('Please enter or scan an AWB / Docket number.', 'error');
             document.getElementById('inputAwbNumber')?.focus();
             return;
         }
+
+        // 3. Customer name check
         if (!party) {
             showToast('Please enter the Name of Party (Customer).', 'error');
             document.getElementById('inputPartyName')?.focus();
@@ -1415,7 +1698,8 @@
                 awb_number: awb,
                 customer_name: party,
                 uploaded_by: uploader || 'Warehouse Staff',
-                cartons: state.currentCartonRows
+                cartons: state.currentCartonRows,
+                awb_photo: state.currentAwbPhoto
             });
 
             showToast(`Successfully saved ${state.currentCartonRows.length} cartons for AWB ${awb}!`, 'success');
@@ -1449,6 +1733,7 @@
         if (party) party.value = '';
         if (total) total.value = '4';
 
+        window.removeAwbPhoto();
         window.generateCartonRows();
         updateBatchIdPreview();
         window.closePartyDropdown();
@@ -1582,6 +1867,15 @@
                             </span>
                         </div>
                         <span class="text-[10px] text-slate-400 font-mono mt-0.5 block">AWB: ${c.awb_number}</span>
+                        ${c.awb_photo_url ? `
+                            <button type="button" 
+                                    onclick="window.openLightboxGallery(['${c.awb_photo_url}'], 0, 'Physical AWB Docket Slip', '${escapeHtml(c.awb_number)}', '${escapeHtml(c.customer_name)}')"
+                                    class="inline-flex items-center gap-1 text-[10px] font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-2 py-0.5 rounded-md mt-1 transition-colors cursor-pointer shadow-2xs active:scale-95" 
+                                    title="Click to view attached AWB physical copy">
+                                <i data-lucide="file-text" class="w-3 h-3 text-blue-600"></i>
+                                <span>📄 AWB Slip</span>
+                            </button>
+                        ` : ''}
                     </td>
 
                     <!-- 4th Column: Name of Party -->
@@ -1748,16 +2042,32 @@
         const photosContainer = document.getElementById('editCartonPhotosPreview');
         if (photosContainer) {
             const photosList = carton.photos && carton.photos.length > 0 ? carton.photos : (carton.image_url ? [carton.image_url] : []);
-            if (photosList.length === 0) {
+            let itemsHtml = '';
+
+            if (carton.awb_photo_url) {
+                itemsHtml += `
+                    <div class="relative w-11 h-11 rounded-lg border-2 border-blue-400 overflow-hidden shrink-0 group cursor-pointer shadow-2xs hover:scale-105 transition-all"
+                         onclick="window.openLightboxGallery(['${carton.awb_photo_url}'], 0, 'Physical AWB Docket Slip', '${escapeHtml(carton.awb_number)}', '${escapeHtml(carton.customer_name)}')" 
+                         title="Click to view attached AWB Copy">
+                        <img src="${carton.awb_photo_url}" class="w-full h-full object-cover">
+                        <span class="absolute bottom-0 right-0 px-1 text-[8px] bg-blue-700 text-white font-bold rounded-tl">AWB</span>
+                    </div>
+                `;
+            }
+
+            if (photosList.length === 0 && !carton.awb_photo_url) {
                 photosContainer.innerHTML = `<span class="text-slate-400 text-[11px] italic">No photos attached to this carton.</span>`;
             } else {
-                photosContainer.innerHTML = photosList.map((url, pIdx) => `
+                itemsHtml += photosList.map((url, pIdx) => `
                     <div class="relative w-11 h-11 rounded-lg border border-slate-300 overflow-hidden shrink-0 group cursor-pointer shadow-2xs hover:scale-105 transition-all"
                          onclick="window.openCartonGalleryById('${carton.id}')" title="Click to view full photo">
                         <img src="${url}" class="w-full h-full object-cover">
                         <span class="absolute bottom-0 right-0 px-1 text-[9px] bg-black/70 text-white font-bold rounded-tl">#${pIdx + 1}</span>
                     </div>
-                `).join('') + `<span class="text-slate-500 text-[10px] ml-1">(${photosList.length} photos)</span>`;
+                `).join('');
+
+                const countText = `${photosList.length} carton photo${photosList.length === 1 ? '' : 's'}${carton.awb_photo_url ? ' + 1 AWB Slip' : ''}`;
+                photosContainer.innerHTML = itemsHtml + `<span class="text-slate-500 text-[10px] ml-1">(${countText})</span>`;
             }
         }
 
