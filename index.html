@@ -49,8 +49,8 @@
     <!-- SheetJS for Excel (.xlsx) Export -->
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
-    <!-- ZXing Barcode & QR Code Reader CDN for Automatic AWB Barcode Scanning -->
-    <script src="https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js"></script>
+    <!-- Tesseract.js Client-Side OCR Engine for Automatic Alphanumeric AWB Scanning -->
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 
     <!-- Custom Styles -->
     <link rel="stylesheet" href="css/styles.css">
@@ -183,22 +183,22 @@
                             <!-- State A: Empty (Prompt to Snap / Upload) -->
                             <div id="awbPhotoEmptyState" class="flex flex-col items-center justify-center py-2 cursor-pointer" onclick="document.getElementById('inputAwbPhotoFile').click()">
                                 <div class="w-10 h-10 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center mb-1.5 shadow-2xs group-hover:scale-105 transition-transform">
-                                    <i data-lucide="scan-barcode" class="w-5 h-5"></i>
+                                    <i data-lucide="scan-text" class="w-5 h-5"></i>
                                 </div>
                                 <div class="text-xs font-bold text-slate-800 flex items-center gap-1">
                                     <span>📷 Snap / Upload AWB Copy</span>
                                     <span class="text-rose-500 font-black">*</span>
                                 </div>
                                 <p class="text-[10px] text-emerald-700 font-medium mt-0.5">
-                                    Auto-scans barcode & fills AWB number
+                                    Auto-scans alphanumeric AWB number
                                 </p>
                             </div>
 
                             <!-- State B: Scanning in progress -->
                             <div id="awbPhotoScanningState" class="hidden flex flex-col items-center justify-center py-2.5">
                                 <div class="animate-spin w-7 h-7 border-2 border-emerald-600 border-t-transparent rounded-full mb-1.5"></div>
-                                <span class="text-xs font-bold text-emerald-800">Scanning Barcode...</span>
-                                <span class="text-[10px] text-slate-500">Detecting AWB number below barcode</span>
+                                <span id="awbScanningStatusText" class="text-xs font-bold text-emerald-800">Reading Alphanumeric AWB #...</span>
+                                <span id="awbScanningSubtext" class="text-[10px] text-slate-500">Scanning printed text on docket slip</span>
                             </div>
 
                             <!-- State C: Photo Attached -->
@@ -217,7 +217,7 @@
                                         <span class="truncate">AWB Copy Attached</span>
                                     </div>
                                     <div id="awbScanResultBadge" class="text-[10px] text-emerald-700 font-medium truncate mt-0.5">
-                                        Barcode scanned
+                                        Text OCR ready
                                     </div>
                                     <div class="flex items-center gap-2 mt-1">
                                         <button type="button" onclick="document.getElementById('inputAwbPhotoFile').click()" class="text-[10px] font-bold text-emerald-700 hover:text-emerald-900 underline flex items-center gap-0.5 cursor-pointer">
@@ -234,13 +234,19 @@
 
                         <!-- AWB Input Field -->
                         <div class="relative">
-                            <input type="text" id="inputAwbNumber" placeholder="e.g. 12345678" class="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-sm font-mono font-bold tracking-wider focus:ring-2 focus:ring-emerald-500 focus:bg-white outline-none uppercase transition-all">
+                            <input type="text" id="inputAwbNumber" placeholder="e.g. 12345678 or DEL987654" class="w-full bg-slate-50 border border-slate-300 rounded-xl px-3 py-2.5 text-sm font-mono font-bold tracking-wider focus:ring-2 focus:ring-emerald-500 focus:bg-white outline-none uppercase transition-all">
                             <div id="awbScanSuccessIcon" class="hidden absolute right-3 top-2.5 text-emerald-600 flex items-center gap-1 text-[11px] font-bold">
                                 <i data-lucide="check" class="w-4 h-4 text-emerald-600"></i>
                                 <span>Scanned</span>
                             </div>
                         </div>
-                        <p class="text-[10px] text-slate-400 mt-1">Auto-filled from barcode, or enter manually</p>
+
+                        <!-- Candidate Quick-Pills (if multiple numbers detected on slip) -->
+                        <div id="awbCandidatesContainer" class="hidden mt-1.5 p-2 bg-emerald-50/70 border border-emerald-200 rounded-xl">
+                            <span class="text-[10px] text-emerald-900 font-bold block mb-1">Detected Numbers (tap to select):</span>
+                            <div id="awbCandidatesList" class="flex flex-wrap gap-1"></div>
+                        </div>
+                        <p class="text-[10px] text-slate-400 mt-1">Auto-detected from docket text, or enter manually</p>
                     </div>
 
                     <!-- Column 4: Name of Party with Dropdown Menu -->
@@ -873,10 +879,10 @@
     </div>
 
     <!-- Application Core Script (Loads from root or js/ directory with automatic fallback & cache buster) -->
-    <script src="app.js?v=12.0"></script>
+    <script src="app.js?v=13.0"></script>
     <script>
         if (typeof window.saveNewTeamMember !== 'function') {
-            document.write('<script src="js/app.js?v=12.0"><\/script>');
+            document.write('<script src="js/app.js?v=13.0"><\/script>');
         }
     </script>
 </body>

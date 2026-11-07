@@ -1417,129 +1417,243 @@
     };
 
     // --------------------------------------------------------------------------
-    // 7.5. AWB DOCKET PHOTO & AUTOMATIC BARCODE SCANNER
+    // 7.5. AWB DOCKET PHOTO & ALPHANUMERIC OCR TEXT SCANNER
+    // (Scans printed alphanumeric letters & digits from physical docket copy)
     // --------------------------------------------------------------------------
 
-    /**
-     * Client-side Barcode Scanner:
-     * Reads photo of physical shipping docket slip (AWB copy) and extracts barcode
-     * (Code 128, Code 39, EAN-13, ITF, etc.) printed above the AWB number.
-     * Supports:
-     * 1. Native window.BarcodeDetector (fastest on modern Android Chrome / Chromium)
-     * 2. ZXing BrowserMultiFormatReader (universal client-side fallback)
-     * 3. Canvas image enhancement (grayscale & contrast stretching for faint / tilted barcodes)
-     */
-    async function scanBarcodeFromImage(imageElement) {
-        if (!imageElement) return null;
+    let tesseractWorkerInstance = null;
+    let isOcrWorkerInitializing = false;
 
-        // Pass 1: Native BarcodeDetector (Modern Android Chrome / Chromium)
-        if ('BarcodeDetector' in window) {
-            try {
-                const supported = await window.BarcodeDetector.getSupportedFormats().catch(() => []);
-                const targetFormats = ['code_128', 'code_39', 'ean_13', 'itf', 'codabar', 'qr_code', 'upc_a']
-                    .filter(fmt => supported.length === 0 || supported.includes(fmt));
-                
-                const detector = new window.BarcodeDetector({
-                    formats: targetFormats.length ? targetFormats : ['code_128', 'code_39']
-                });
-                const barcodes = await detector.detect(imageElement);
-                if (barcodes && barcodes.length > 0) {
-                    for (const b of barcodes) {
-                        if (b.rawValue && b.rawValue.trim()) {
-                            console.log('[BarcodeDetector] Detected barcode:', b.format, b.rawValue);
-                            return b.rawValue.trim();
+    /**
+     * Initializes / retrieves client-side Tesseract OCR worker
+     */
+    async function getOcrWorker() {
+        if (tesseractWorkerInstance) return tesseractWorkerInstance;
+        if (!window.Tesseract || isOcrWorkerInitializing) return null;
+
+        try {
+            isOcrWorkerInitializing = true;
+            const worker = await window.Tesseract.createWorker('eng', 1, {
+                logger: (m) => {
+                    if (m && m.status === 'recognizing text') {
+                        const pct = Math.round((m.progress || 0) * 100);
+                        const statusEl = document.getElementById('awbScanningStatusText');
+                        if (statusEl) statusEl.textContent = `Reading Alphanumeric AWB #... ${pct}%`;
+                    }
+                }
+            });
+            tesseractWorkerInstance = worker;
+            isOcrWorkerInitializing = false;
+            return tesseractWorkerInstance;
+        } catch (err) {
+            console.warn('[OCR Engine] Worker init notice:', err);
+            isOcrWorkerInitializing = false;
+            return null;
+        }
+    }
+
+    /**
+     * Extracts alphanumeric AWB/Docket candidates from OCR text
+     */
+    function extractAwbCandidates(text) {
+        if (!text || typeof text !== 'string') return [];
+
+        const stopWords = new Set([
+            'DELIVERY', 'CUSTOMER', 'WEIGHT', 'ORIGIN', 'CONSIGNEE', 'CONSIGNOR',
+            'SIGNATURE', 'CARRIER', 'EXPRESS', 'PACKAGES', 'INVOICE', 'DISPATCH',
+            'SHIPMENT', 'SHIPPED', 'RECEIVER', 'ADDRESS', 'PINCODE', 'CONTENT',
+            'DESCRIPTION', 'TOTAL', 'AMOUNT', 'PRIVATE', 'LIMITED', 'LOGISTICS',
+            'TRANSPORT', 'STANDARD', 'SPECIAL', 'SERVICE', 'BOOKING', 'BRANCH',
+            'DELHI', 'MUMBAI', 'KOLKATA', 'CHENNAI', 'BANGALORE', 'HYDERABAD'
+        ]);
+
+        const scored = [];
+
+        // Clean helper: strip surrounding symbols, keep uppercase alphanumeric and hyphens
+        const cleanVal = (val) => {
+            return (val || '')
+                .replace(/^[^a-zA-Z0-9]+|[^a-zA-Z0-9]+$/g, '')
+                .replace(/[\s_]+/g, '')
+                .toUpperCase();
+        };
+
+        // Helper: check if string is a calendar date
+        const isDate = (s) => /^\d{1,2}[-./]\d{1,2}[-./]\d{4}$|^\d{4}[-./]\d{1,2}[-./]\d{1,2}$/.test(s);
+
+        // Pass 1: Explicit labels like "AWB No: 12345678", "Docket No 99401823", "Waybill: DEL88219"
+        const labelPatterns = [
+            /(?:AWB|A\.W\.B|AIRWAYBILL|AIR\s*WAY\s*BILL)[\s.:#№\-_]*([A-Z0-9\-]{5,24})/gi,
+            /(?:DOCKET|DOC\s*NO|DOCK\s*NO)[\s.:#№\-_]*([A-Z0-9\-]{5,24})/gi,
+            /(?:WAYBILL|WAY\s*BILL|W\/B)[\s.:#№\-_]*([A-Z0-9\-]{5,24})/gi,
+            /(?:CONSIGNMENT|C\.N|CN\s*NO)[\s.:#№\-_]*([A-Z0-9\-]{5,24})/gi,
+            /(?:LR\s*NO|L\.R\s*NO|L\/R)[\s.:#№\-_]*([A-Z0-9\-]{5,24})/gi,
+            /(?:TRACK(?:ING)?\s*(?:NO|#)?)[\s.:#№\-_]*([A-Z0-9\-]{5,24})/gi
+        ];
+
+        for (const regex of labelPatterns) {
+            let m;
+            while ((m = regex.exec(text)) !== null) {
+                const val = cleanVal(m[1]);
+                const digits = (val.match(/\d/g) || []).length;
+                if (val.length >= 5 && val.length <= 22 && digits >= 3 && !stopWords.has(val) && !isDate(val)) {
+                    scored.push({ val, score: 100 + digits });
+                }
+            }
+        }
+
+        // Pass 2: Line-by-line inspection (label on one line, number on same or next line)
+        const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            if (/(?:AWB|DOCKET|WAYBILL|CONSIGN|TRACK|LR)/i.test(line)) {
+                // Check all tokens on this line
+                const tokens = line.split(/[\s,;:|]+/).map(cleanVal).filter(Boolean);
+                for (const tok of tokens) {
+                    const digits = (tok.match(/\d/g) || []).length;
+                    if (tok.length >= 6 && tok.length <= 22 && digits >= 4 && !stopWords.has(tok) && !isDate(tok)) {
+                        scored.push({ val: tok, score: 85 + digits });
+                    }
+                }
+                // Check next line
+                if (i + 1 < lines.length) {
+                    const nextTokens = lines[i + 1].split(/[\s,;:|]+/).map(cleanVal).filter(Boolean);
+                    for (const tok of nextTokens) {
+                        const digits = (tok.match(/\d/g) || []).length;
+                        if (tok.length >= 6 && tok.length <= 22 && digits >= 4 && !stopWords.has(tok) && !isDate(tok)) {
+                            scored.push({ val: tok, score: 80 + digits });
                         }
                     }
                 }
-            } catch (e) {
-                console.warn('[BarcodeDetector] Native scan attempt:', e);
             }
         }
 
-        // Pass 2: ZXing MultiFormat Reader on original image
-        if (window.ZXing && window.ZXing.BrowserMultiFormatReader) {
-            try {
-                const reader = new window.ZXing.BrowserMultiFormatReader();
-                const result = await reader.decodeFromImageElement(imageElement);
-                if (result && result.getText && result.getText().trim()) {
-                    console.log('[ZXing] Detected barcode:', result.getText());
-                    return result.getText().trim();
-                }
-            } catch (zxErr) {
-                // ZXing throws NotFoundException when no barcode detected on first pass
+        // Pass 3: General scan for prominent alphanumeric tokens (e.g. 6 to 18 characters with at least 4 digits)
+        const generalRegex = /\b([A-Z0-9\-]{6,18})\b/gi;
+        let gm;
+        while ((gm = generalRegex.exec(text)) !== null) {
+            const val = cleanVal(gm[1]);
+            const digits = (val.match(/\d/g) || []).length;
+            // Must have at least 4 digits to qualify as an AWB / docket number
+            if (digits >= 4 && val.length >= 6 && val.length <= 18 && !stopWords.has(val)) {
+                // Avoid calendar date formats
+                if (/^\d{1,2}[-./]\d{1,2}[-./]\d{4}$|^\d{4}[-./]\d{1,2}[-./]\d{1,2}$/.test(val)) continue;
+                scored.push({ val, score: 50 + digits });
             }
         }
 
-        // Pass 3: Canvas Preprocessing (Downscale if huge, Grayscale & Contrast Stretched)
+        // Sort descending by score, deduplicate
+        scored.sort((a, b) => b.score - a.score);
+        const unique = [];
+        const seen = new Set();
+        for (const item of scored) {
+            if (!seen.has(item.val)) {
+                seen.add(item.val);
+                unique.push(item.val);
+            }
+        }
+
+        return unique.slice(0, 5); // Return top 5 candidate matches
+    }
+
+    window.extractAwbCandidates = extractAwbCandidates;
+
+    /**
+     * Optical Character Recognition (OCR) Engine:
+     * Reads photo of physical shipping docket slip (AWB copy) and extracts the
+     * printed alphanumeric AWB / Docket number.
+     */
+    async function scanAlphanumericFromImage(imageElement) {
+        if (!imageElement) return { primary: null, candidates: [], rawText: '' };
+
+        // 1. Prepare canvas with optimal resolution for OCR speed (<2s) & accuracy
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        if (!ctx) return { primary: null, candidates: [], rawText: '' };
+
+        let width = imageElement.naturalWidth || imageElement.width || 1200;
+        let height = imageElement.naturalHeight || imageElement.height || 800;
+        const maxDim = 1300;
+        if (width > maxDim || height > maxDim) {
+            const scale = Math.min(maxDim / width, maxDim / height);
+            width = Math.round(width * scale);
+            height = Math.round(height * scale);
+        }
+        canvas.width = width;
+        canvas.height = height;
+
+        ctx.drawImage(imageElement, 0, 0, width, height);
+
+        // Preprocess: Grayscale and gentle contrast enhancement for crisp character edges
         try {
-            const canvas = document.createElement('canvas');
-            const ctx = canvas.getContext('2d', { willReadFrequently: true });
-            if (!ctx) return null;
-
-            let width = imageElement.naturalWidth || imageElement.width || 1200;
-            let height = imageElement.naturalHeight || imageElement.height || 800;
-            const maxDim = 1600;
-            if (width > maxDim || height > maxDim) {
-                const scale = Math.min(maxDim / width, maxDim / height);
-                width = Math.round(width * scale);
-                height = Math.round(height * scale);
-            }
-            canvas.width = width;
-            canvas.height = height;
-
-            ctx.drawImage(imageElement, 0, 0, width, height);
-
-            // Native BarcodeDetector on canvas
-            if ('BarcodeDetector' in window) {
-                try {
-                    const detector = new window.BarcodeDetector();
-                    const barcodes = await detector.detect(canvas);
-                    if (barcodes && barcodes.length > 0 && barcodes[0].rawValue) {
-                        return barcodes[0].rawValue.trim();
-                    }
-                } catch (e) {}
-            }
-
-            // Contrast & Grayscale processing
             const imgData = ctx.getImageData(0, 0, width, height);
             const d = imgData.data;
             for (let i = 0; i < d.length; i += 4) {
-                const gray = (d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114);
-                // Contrast stretch around midpoint 128
-                const contrast = gray > 128 ? Math.min(255, gray * 1.35) : Math.max(0, gray * 0.65);
-                d[i] = contrast;
-                d[i + 1] = contrast;
-                d[i + 2] = contrast;
+                const gray = d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114;
+                const enhanced = gray > 130 ? Math.min(255, gray * 1.25) : Math.max(0, gray * 0.75);
+                d[i] = enhanced;
+                d[i + 1] = enhanced;
+                d[i + 2] = enhanced;
             }
             ctx.putImageData(imgData, 0, 0);
-
-            // Native BarcodeDetector on high-contrast canvas
-            if ('BarcodeDetector' in window) {
-                try {
-                    const detector = new window.BarcodeDetector();
-                    const barcodes = await detector.detect(canvas);
-                    if (barcodes && barcodes.length > 0 && barcodes[0].rawValue) {
-                        return barcodes[0].rawValue.trim();
-                    }
-                } catch (e) {}
-            }
-
-            // ZXing on high-contrast canvas
-            if (window.ZXing && window.ZXing.BrowserMultiFormatReader) {
-                try {
-                    const reader = new window.ZXing.BrowserMultiFormatReader();
-                    const result = await reader.decodeFromCanvas(canvas);
-                    if (result && result.getText && result.getText().trim()) {
-                        return result.getText().trim();
-                    }
-                } catch (zxErr2) {}
-            }
-        } catch (canvasErr) {
-            console.warn('[BarcodeScanner] Canvas enhancement error:', canvasErr);
+        } catch (e) {
+            console.warn('[OCR Preprocessing] Notice:', e);
         }
 
-        return null;
+        let rawText = '';
+
+        // 2. Perform OCR via Tesseract.js
+        if (window.Tesseract) {
+            try {
+                const statusEl = document.getElementById('awbScanningStatusText');
+                if (statusEl) statusEl.textContent = 'Reading Alphanumeric AWB #...';
+
+                const worker = await getOcrWorker();
+                if (worker) {
+                    const res = await worker.recognize(canvas);
+                    rawText = res && res.data && res.data.text ? res.data.text : '';
+                } else {
+                    const res = await window.Tesseract.recognize(canvas, 'eng', {
+                        logger: (m) => {
+                            if (m && m.status === 'recognizing text') {
+                                const pct = Math.round((m.progress || 0) * 100);
+                                const statusEl = document.getElementById('awbScanningStatusText');
+                                if (statusEl) statusEl.textContent = `Reading Alphanumeric AWB #... ${pct}%`;
+                            }
+                        }
+                    });
+                    rawText = res && res.data && res.data.text ? res.data.text : '';
+                }
+            } catch (ocrErr) {
+                console.warn('[OCR Engine] Recognition notice:', ocrErr);
+            }
+        }
+
+        // 3. Extract alphanumeric candidates
+        const candidates = extractAwbCandidates(rawText);
+        const primary = candidates.length > 0 ? candidates[0] : null;
+
+        return { primary, candidates, rawText };
     }
+
+    window.selectAwbCandidate = function (val) {
+        if (!val) return;
+        const awbInput = document.getElementById('inputAwbNumber');
+        if (awbInput) {
+            awbInput.value = val;
+            awbInput.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+
+        const badge = document.getElementById('awbScanResultBadge');
+        if (badge) {
+            badge.innerHTML = `<span class="text-emerald-700 font-bold flex items-center gap-1"><i data-lucide="check" class="w-3 h-3"></i> Scanned: ${escapeHtml(val)}</span>`;
+        }
+
+        const successIcon = document.getElementById('awbScanSuccessIcon');
+        if (successIcon) successIcon.classList.remove('hidden');
+
+        showToast(`Selected AWB Number: ${val}`, 'info');
+        if (window.lucide && typeof window.lucide.createIcons === 'function') window.lucide.createIcons();
+    };
 
     window.handleAwbPhotoSelected = async function (event) {
         const file = event.target.files && event.target.files[0];
@@ -1552,11 +1666,15 @@
         const badge = document.getElementById('awbScanResultBadge');
         const successIcon = document.getElementById('awbScanSuccessIcon');
         const awbInput = document.getElementById('inputAwbNumber');
+        const candCont = document.getElementById('awbCandidatesContainer');
+        const candList = document.getElementById('awbCandidatesList');
 
         // Show Scanning state
         if (emptyState) emptyState.classList.add('hidden');
         if (attachedState) attachedState.classList.add('hidden');
         if (scanningState) scanningState.classList.remove('hidden');
+        if (candCont) candCont.classList.add('hidden');
+        if (candList) candList.innerHTML = '';
 
         const reader = new FileReader();
         reader.onload = async function (e) {
@@ -1565,14 +1683,14 @@
 
             if (thumbImg) thumbImg.src = dataUrl;
 
-            // Load into an HTML Image element to perform barcode scan
+            // Load into Image element to run alphanumeric text OCR
             const tempImg = new Image();
             tempImg.crossOrigin = 'anonymous';
 
             tempImg.onload = async function () {
-                let scannedAwb = null;
+                let ocrResult = { primary: null, candidates: [] };
                 try {
-                    scannedAwb = await scanBarcodeFromImage(tempImg);
+                    ocrResult = await scanAlphanumericFromImage(tempImg);
                 } catch (scanErr) {
                     console.warn('[handleAwbPhotoSelected] Scan error:', scanErr);
                 }
@@ -1581,30 +1699,46 @@
                 if (scanningState) scanningState.classList.add('hidden');
                 if (attachedState) attachedState.classList.remove('hidden');
 
-                if (scannedAwb) {
-                    const cleanAwb = scannedAwb.trim().replace(/^[\r\n\t]+|[\r\n\t]+$/g, '');
+                const primaryAwb = ocrResult.primary;
+                const candidates = ocrResult.candidates || [];
+
+                if (primaryAwb) {
                     if (awbInput) {
-                        awbInput.value = cleanAwb;
+                        awbInput.value = primaryAwb;
                         // Fire input event so carton rows & batch preview update immediately
                         awbInput.dispatchEvent(new Event('input', { bubbles: true }));
                     }
 
                     if (badge) {
-                        badge.innerHTML = `<span class="text-emerald-700 font-bold flex items-center gap-1"><i data-lucide="check" class="w-3 h-3"></i> Scanned: ${escapeHtml(cleanAwb)}</span>`;
+                        badge.innerHTML = `<span class="text-emerald-700 font-bold flex items-center gap-1"><i data-lucide="check" class="w-3 h-3"></i> Scanned: ${escapeHtml(primaryAwb)}</span>`;
                     }
                     if (successIcon) successIcon.classList.remove('hidden');
 
-                    showToast(`Scanned AWB Barcode: ${cleanAwb}`, 'success');
+                    showToast(`Scanned Alphanumeric AWB: ${primaryAwb}`, 'success');
                 } else {
                     if (badge) {
                         badge.innerHTML = `<span class="text-amber-700 font-medium">Photo attached. Check / enter AWB # manually</span>`;
                     }
                     if (successIcon) successIcon.classList.add('hidden');
 
-                    showToast('AWB photo attached! Please verify or enter AWB # manually.', 'info');
+                    showToast('AWB photo attached! Please check or enter AWB # manually.', 'info');
                     if (awbInput && !awbInput.value.trim()) {
                         awbInput.focus();
                     }
+                }
+
+                // Render candidate quick-pills if multiple numbers were found
+                if (candCont && candList && candidates.length > 1) {
+                    candList.innerHTML = candidates.map(c => `
+                        <button type="button" 
+                                onclick="window.selectAwbCandidate('${escapeHtml(c)}')"
+                                class="px-2 py-0.5 rounded-md text-xs font-mono font-bold bg-white text-emerald-800 border border-emerald-300 hover:bg-emerald-100 hover:border-emerald-400 active:scale-95 transition-all cursor-pointer shadow-2xs">
+                            ${escapeHtml(c)}
+                        </button>
+                    `).join('');
+                    candCont.classList.remove('hidden');
+                } else if (candCont) {
+                    candCont.classList.add('hidden');
                 }
 
                 if (window.lucide && typeof window.lucide.createIcons === 'function') {
@@ -1630,12 +1764,16 @@
         const attachedState = document.getElementById('awbPhotoAttachedState');
         const thumbImg = document.getElementById('awbPhotoThumbImg');
         const successIcon = document.getElementById('awbScanSuccessIcon');
+        const candCont = document.getElementById('awbCandidatesContainer');
+        const candList = document.getElementById('awbCandidatesList');
 
         if (emptyState) emptyState.classList.remove('hidden');
         if (scanningState) scanningState.classList.add('hidden');
         if (attachedState) attachedState.classList.add('hidden');
         if (thumbImg) thumbImg.src = '';
         if (successIcon) successIcon.classList.add('hidden');
+        if (candCont) candCont.classList.add('hidden');
+        if (candList) candList.innerHTML = '';
 
         if (window.lucide && typeof window.lucide.createIcons === 'function') {
             window.lucide.createIcons();
@@ -3006,6 +3144,13 @@ CREATE POLICY "Public access to warehouse photos" ON storage.objects FOR ALL TO 
         document.getElementById('inputDispatchDate')?.addEventListener('change', updateBatchIdPreview);
 
         updateBatchIdPreview();
+
+        // Pre-warm Tesseract OCR worker in background for instant response
+        if (window.Tesseract) {
+            setTimeout(() => {
+                getOcrWorker().catch(() => {});
+            }, 1200);
+        }
 
         if (window.lucide && typeof window.lucide.createIcons === 'function') {
             window.lucide.createIcons();
